@@ -12,11 +12,32 @@
       content="Crypte Éternelle, un roguelike d'action en 2D jouable dans le navigateur : descends, survis, recommence."
     />
     <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
+    <link rel="canonical" href="https://sdelmart.github.io/crypte-eternelle/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="fr_FR" />
+    <meta property="og:title" content="Crypte Éternelle" />
+    <meta
+      property="og:description"
+      content="Roguelike d'action 2D jouable dans le navigateur : 5 étages générés aléatoirement, 3 héros, 4 boss et 26 objets."
+    />
+    <meta property="og:url" content="https://sdelmart.github.io/crypte-eternelle/" />
+    <meta property="og:image" content="https://sdelmart.github.io/crypte-eternelle/og-image.jpg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Crypte Éternelle" />
+    <meta name="twitter:description" content="Roguelike d'action 2D jouable dans le navigateur." />
+    <meta name="twitter:image" content="https://sdelmart.github.io/crypte-eternelle/og-image.jpg" />
   </head>
   <body>
     <div id="loader">
       <div>CRYPTE ÉTERNELLE</div>
       <div class="ring"></div>
+    </div>
+    <div id="rotate">
+      <div class="phone"></div>
+      <p>Tourne ton appareil en mode paysage</p>
     </div>
     <canvas id="game" width="960" height="640" aria-label="Crypte Éternelle, jeu"></canvas>
     <script type="module" src="./src/main.js"></script>

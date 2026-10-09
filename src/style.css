@@ -52,3 +52,43 @@ canvas {
     transform: rotate(360deg);
   }
 }
+
+#rotate {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: #07060b;
+  color: #e9d5ff;
+  font:
+    600 17px system-ui,
+    sans-serif;
+  text-align: center;
+  padding: 24px;
+}
+#rotate .phone {
+  width: 44px;
+  height: 74px;
+  border: 3px solid #a855f7;
+  border-radius: 10px;
+  animation: tilt 2s ease-in-out infinite;
+}
+@keyframes tilt {
+  0%,
+  30% {
+    transform: rotate(0deg);
+  }
+  60%,
+  100% {
+    transform: rotate(-90deg);
+  }
+}
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate {
+    display: flex;
+  }
+}

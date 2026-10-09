@@ -315,7 +315,7 @@ export const Game = {
       room.announced = true;
       this.stats.secrets++;
       if (this.meta.stats.secrets + this.stats.secrets >= 5) this.unlock('secrets');
-      this.toast = { icon: '🗝️', title: 'Salle secrète !', desc: 'Tu as trouvé un passage caché.', t: 2.6 };
+      this.toast = { icon: '🔑', title: 'Salle secrète !', desc: 'Tu as trouvé un passage caché.', t: 2.6 };
     }
     if (this.tut && this.tut.step === TUTORIAL_STEPS.indexOf('explore') && from && from !== room) this.advanceTutorial();
     this.computeField();

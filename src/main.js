@@ -14,7 +14,8 @@ const ctx = canvas.getContext('2d');
 
 function resize() {
   const s = Math.min(innerWidth / W, innerHeight / H);
-  const dpr = window.devicePixelRatio || 1;
+  // plafonné à 2 : au-delà, le coût de rendu augmente sans gain visible
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.style.width = W * s + 'px';
   canvas.style.height = H * s + 'px';
   canvas.width = Math.round(W * s * dpr);
@@ -47,11 +48,14 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 
-// Écran de chargement : on attend les polices pour éviter un premier rendu sans elles
-document.fonts.ready.then(() => {
-  document.getElementById('loader')?.classList.add('done');
-  requestAnimationFrame(frame);
-});
+// Écran de chargement : le canvas ne déclenche pas le chargement des polices, on les demande explicitement
+const FONTS = ['700 20px Cinzel', '900 40px Cinzel', '400 16px Outfit', '600 16px Outfit', '700 16px Outfit'];
+Promise.all(FONTS.map(f => document.fonts.load(f)))
+  .catch(() => {})
+  .then(() => {
+    document.getElementById('loader')?.classList.add('done');
+    requestAnimationFrame(frame);
+  });
 
 // Accès de débogage, uniquement en développement
 if (import.meta.env.DEV) window.__crypte = { Game, Input, view };

@@ -566,7 +566,7 @@ Object.assign(Game, {
   pickupIcon(k) {
     if (k.kind === 'heart' || k.id === 'heart') return '❤️';
     if (k.kind === 'bomb') return '💣';
-    if (k.kind === 'key') return '🗝️';
+    if (k.kind === 'key') return '🔑';
     return anyItem(k.id).icon;
   },
   drawPickup(ctx, k) {
@@ -606,7 +606,8 @@ Object.assign(Game, {
     ctx.globalAlpha = 0.25 + Math.sin(this.t * 4) * 0.1;
     circle(ctx, k.x, k.y - 16 + bob, 24, isActive ? '#38bdf8' : '#fde047');
     ctx.globalAlpha = 1;
-    drawItemIcon(ctx, this.pickupIcon(k), k.x, k.y - 16 + bob, 30);
+    if (k.kind === 'key') drawKey(ctx, k.x - 2, k.y - 16 + bob, 1.4);
+    else drawItemIcon(ctx, this.pickupIcon(k), k.x, k.y - 16 + bob, 30);
     if (k.type === 'shop') {
       drawCoin(ctx, k.x - 14, k.y + 26, 6);
       text(ctx, String(k.price), k.x + 6, k.y + 32, 16, this.player.coins >= k.price ? '#fde047' : '#f87171', 'center');

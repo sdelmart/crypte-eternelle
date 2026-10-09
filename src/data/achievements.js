@@ -8,7 +8,7 @@ export const ACHIEVEMENTS = [
   { id: 'fast', name: 'Éclair', desc: 'Gagner en moins de 12 minutes', icon: '⚡' },
   { id: 'nohit', name: 'Intouchable', desc: 'Vaincre un boss sans être touché', icon: '✨' },
   { id: 'clutch', name: 'Sur le fil', desc: 'Vaincre un boss avec un demi-cœur', icon: '💔' },
-  { id: 'secrets', name: 'Archéologue', desc: 'Trouver 5 salles secrètes', icon: '🗝️' },
+  { id: 'secrets', name: 'Archéologue', desc: 'Trouver 5 salles secrètes', icon: '🔑' },
   { id: 'collector', name: 'Collectionneur', desc: 'Découvrir tous les objets', icon: '📚' },
   { id: 'butcher', name: 'Fléau', desc: 'Vaincre 1000 ennemis', icon: '☠️' },
   { id: 'elites', name: "Chasseur d'élite", desc: "Vaincre 25 ennemis d'élite", icon: '🎯' },
