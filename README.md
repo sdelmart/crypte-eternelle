@@ -9,15 +9,15 @@ Roguelike d'action en 2D pour navigateur. Aucune dépendance, aucun build : ouvr
 
 ## Contrôles
 
-| Action | Clavier / souris | Manette |
-|---|---|---|
-| Bouger | ZQSD (ou WASD) | Stick gauche |
-| Tirer | Souris ou flèches | Stick droit |
-| Dash (invincible) | Espace / Maj | A / RB / RT |
-| Bombe | E | X / LB |
-| Carte | Tab | Select |
-| Pause | Échap / P | Start |
-| Plein écran / son | F / M | — |
+| Action            | Clavier / souris  | Manette      |
+| ----------------- | ----------------- | ------------ |
+| Bouger            | ZQSD (ou WASD)    | Stick gauche |
+| Tirer             | Souris ou flèches | Stick droit  |
+| Dash (invincible) | Espace / Maj      | A / RB / RT  |
+| Bombe             | E                 | X / LB       |
+| Carte             | Tab               | Select       |
+| Pause             | Échap / P         | Start        |
+| Plein écran / son | F / M             | —            |
 
 ## Contenu
 
