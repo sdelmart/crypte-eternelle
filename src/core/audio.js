@@ -1,10 +1,7 @@
-import { Store, mulberry32 } from './utils.js';
+import { mulberry32 } from './utils.js';
+import { Settings, onSettingsChange } from './settings.js';
 
-export const Settings = Object.assign({ music: 0.6, sfx: 0.8, shake: true, dmgNumbers: true }, Store.get('crypte_settings', {}));
-export function saveSettings() {
-  Store.set('crypte_settings', Settings);
-  Sfx.applyVolumes();
-}
+onSettingsChange(() => Sfx.applyVolumes());
 
 // ---------- Primitives audio ----------
 export function osc(ctx, dest, t, f, d, type = 'square', v = 0.2, f2 = null) {
@@ -169,6 +166,34 @@ export const Sfx = {
         break;
       case 'unlock':
         [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone(f, 0.3, 'triangle', 0.16, null, i * 0.1));
+        break;
+      case 'active':
+        this.tone(330, 0.3, 'sawtooth', 0.12, 990);
+        this.noise(0.25, 0.12, 2400);
+        break;
+      case 'chest':
+        this.noise(0.12, 0.15, 900);
+        [523, 784, 1047].forEach((f, i) => this.tone(f, 0.15, 'square', 0.1, null, 0.08 + i * 0.07));
+        break;
+      case 'locked':
+        this.tone(220, 0.08, 'square', 0.12);
+        this.tone(180, 0.12, 'square', 0.12, null, 0.08);
+        break;
+      case 'lob':
+        this.tone(500, 0.3, 'sine', 0.1, 200);
+        break;
+      case 'summon':
+        this.tone(150, 0.5, 'sawtooth', 0.1, 600);
+        this.noise(0.4, 0.08, 1500);
+        break;
+      case 'spike':
+        this.noise(0.08, 0.1, 6000, 0, 'highpass');
+        break;
+      case 'wave':
+        [262, 330, 392].forEach((f, i) => this.tone(f, 0.25, 'sawtooth', 0.12, null, i * 0.1));
+        break;
+      case 'achievement':
+        [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.14, null, i * 0.08));
         break;
       case 'death':
         [392, 330, 262, 196].forEach((f, i) => this.tone(f, 0.35, 'sawtooth', 0.15, null, i * 0.2));

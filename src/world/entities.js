@@ -34,6 +34,11 @@ export class Player {
         rage: false,
         backshot: false,
         bombs: 1,
+        keys: 0,
+        active: null,
+        shots: 0,
+        dashes: 0,
+        traveled: 0,
         coins: 0,
         items: [],
         fireT: 0,
@@ -56,14 +61,15 @@ export class Player {
     return this.hp > 0 && this.iframes <= 0 && this.dashTime <= 0;
   }
   update(dt, g) {
-    let mx = (Input.down('KeyD') ? 1 : 0) - (Input.down('KeyA') ? 1 : 0);
-    let my = (Input.down('KeyS') ? 1 : 0) - (Input.down('KeyW') ? 1 : 0);
+    let mx = (Input.held('right') ? 1 : 0) - (Input.held('left') ? 1 : 0);
+    let my = (Input.held('down') ? 1 : 0) - (Input.held('up') ? 1 : 0);
     let ml = Math.hypot(mx, my);
     if (ml) {
       mx /= ml;
       my /= ml;
     }
-    const pm = Input.pad.move,
+    const tm = Input.touch.move,
+      pm = Math.hypot(tm.x, tm.y) > Math.hypot(Input.pad.move.x, Input.pad.move.y) ? tm : Input.pad.move,
       pml = Math.hypot(pm.x, pm.y);
     if (pml > ml) {
       const k = Math.min(1, pml) / pml;
@@ -76,7 +82,8 @@ export class Player {
 
     const ax = (Input.down('ArrowRight') ? 1 : 0) - (Input.down('ArrowLeft') ? 1 : 0);
     const ay = (Input.down('ArrowDown') ? 1 : 0) - (Input.down('ArrowUp') ? 1 : 0);
-    const pa = Input.pad.aim;
+    const ta = Input.touch.aim,
+      pa = Math.hypot(ta.x, ta.y) > 0 ? ta : Input.pad.aim;
     let shooting = false;
     if (ax || ay) {
       this.aim = Math.atan2(ay, ax);
@@ -84,7 +91,7 @@ export class Player {
     } else if (Math.hypot(pa.x, pa.y) > 0.35) {
       this.aim = Math.atan2(pa.y, pa.x);
       shooting = true;
-    } else if (Input.lastDevice !== 'pad') {
+    } else if (Input.lastDevice === 'mouse' || Input.lastDevice === 'keys') {
       this.aim = Math.atan2(Input.mouse.y - HUD_H - this.y, Input.mouse.x - this.x);
       shooting = Input.mouse.down;
     } else if (this.moving) this.aim = Math.atan2(my, mx);
@@ -95,15 +102,18 @@ export class Player {
       this.dashTime = 0.17;
       this.dashT = this.dashCooldown;
       this.dashHit.clear();
+      this.dashes++;
       Sfx.play('dash');
     }
     if (Input.act('bomb')) {
       if (this.bombs > 0) {
         this.bombs--;
-        g.bombs.push({ x: this.x, y: this.y + 4, t: 1.5, max: 1.5 });
+        g.bombs.push({ x: this.x, y: this.y + 4, t: 1.5, max: 1.5, r: 95 });
+        g.onBombPlaced();
         Sfx.play('place');
       } else Sfx.play('deny');
     }
+    if (Input.act('active')) g.useActive();
     if (this.dashTime > 0) {
       this.dashTime -= dt;
       this.vx = this.dashDir.x * 820;
@@ -114,8 +124,12 @@ export class Player {
       this.vx += (mx * this.speed - this.vx) * k;
       this.vy += (my * this.speed - this.vy) * k;
     }
+    const ox = this.x,
+      oy = this.y;
     moveEntity(this, this.vx * dt, this.vy * dt, g.room, false);
+    this.traveled += Math.hypot(this.x - ox, this.y - oy);
     this.iframes -= dt;
+    this.shield = Math.max(0, (this.shield || 0) - dt);
     this.fireT -= dt;
     if (shooting && this.fireT <= 0) {
       this.fireT = this.fireDelay;
@@ -147,6 +161,7 @@ export class Player {
         color,
       });
     }
+    this.shots++;
     Sfx.play('shoot');
   }
   hurt(n, g) {
@@ -154,7 +169,7 @@ export class Player {
     this.hp = Math.max(0, this.hp - n);
     this.iframes = 1.1;
     g.shake(10);
-    g.flash = 0.4;
+    g.onPlayerHurt();
     g.hitstop = 0.06;
     Sfx.play('hurt');
     g.spark(this.x, this.y, '#ef4444', 18, 220, 4);
@@ -170,6 +185,8 @@ export const ENEMIES = {
   charger: { hp: 18, r: 18, speed: 60, color: '#c2553a', ai: 'charger', body: 'charger' },
   spinner: { hp: 20, r: 17, speed: 45, color: '#f59e0b', ai: 'spinner', body: 'spinner' },
   ghost: { hp: 14, r: 15, speed: 70, color: '#cbd5e1', ai: 'ghost', fly: true, body: 'ghost' },
+  bomber: { hp: 14, r: 15, speed: 80, color: '#84cc16', ai: 'bomber', body: 'bomber' },
+  necro: { hp: 22, r: 16, speed: 55, color: '#6d28d9', ai: 'necro', body: 'necro' },
 };
 export const BOSSES = {
   kingslime: { name: 'Le Roi Gluant', hp: 170, r: 46, color: '#5fd068', ai: 'kingslime', body: 'kingslime', contact: 2 },
@@ -179,16 +196,16 @@ export const BOSSES = {
 };
 export const ENEMY_POOLS = [
   ['slime', 'slime', 'bat', 'archer', 'bigslime'],
-  ['slime', 'bat', 'archer', 'charger', 'spinner', 'bigslime'],
-  ['bat', 'archer', 'charger', 'spinner', 'ghost', 'bigslime'],
-  ['archer', 'charger', 'spinner', 'ghost', 'bigslime', 'bat'],
-  ['charger', 'spinner', 'ghost', 'archer', 'bigslime', 'bat'],
+  ['slime', 'bat', 'archer', 'charger', 'spinner', 'bigslime', 'bomber'],
+  ['bat', 'archer', 'charger', 'spinner', 'ghost', 'bigslime', 'bomber', 'necro'],
+  ['archer', 'charger', 'spinner', 'ghost', 'bigslime', 'bat', 'bomber', 'necro'],
+  ['charger', 'spinner', 'ghost', 'archer', 'bigslime', 'bat', 'bomber', 'necro'],
 ];
 
 export class Enemy {
-  constructor(type, x, y, floor, isBoss, elite = false) {
+  constructor(type, x, y, floor, isBoss, elite = false, hpMult = 1) {
     const def = isBoss ? BOSSES[type] : ENEMIES[type];
-    const scale = (isBoss ? 1 + 0.22 * (floor - 1) : 1 + 0.28 * (floor - 1)) * (elite ? 2.2 : 1);
+    const scale = (isBoss ? 1 + 0.22 * (floor - 1) : 1 + 0.28 * (floor - 1)) * (elite ? 2.2 : 1) * hpMult;
     Object.assign(this, {
       type,
       def,
@@ -276,6 +293,55 @@ export function chaseDir(e, g) {
 }
 
 export const AI = {
+  bomber(e, dt, g) {
+    const p = g.player,
+      d = dist(e, p);
+    e.timer -= dt;
+    let a;
+    if (d < 230) a = angle(p, e);
+    else if (d > 400) {
+      const c = chaseDir(e, g);
+      a = Math.atan2(c.y, c.x);
+    } else a = angle(e, p) + (Math.PI / 2) * e.dirSign;
+    if (e.hitWall) e.dirSign *= -1;
+    e.vx = Math.cos(a) * e.speed;
+    e.vy = Math.sin(a) * e.speed;
+    e.winding = e.timer < 0.5;
+    if (e.timer <= 0) {
+      e.timer = rand(2.4, 3.2);
+      g.lobBomb(e.x, e.y, p.x + p.vx * 0.4, p.y + p.vy * 0.4);
+    }
+  },
+  necro(e, dt, g) {
+    const p = g.player,
+      d = dist(e, p);
+    e.timer -= dt;
+    if (e.tp === undefined) e.tp = rand(4, 6);
+    e.tp -= dt;
+    const a = d < 260 ? angle(p, e) : angle(e, p) + (Math.PI / 2) * e.dirSign;
+    if (e.hitWall) e.dirSign *= -1;
+    e.vx = Math.cos(a) * e.speed;
+    e.vy = Math.sin(a) * e.speed;
+    e.casting = e.timer < 0.6;
+    if (e.timer <= 0) {
+      e.timer = rand(3.5, 4.5);
+      e.summons = (e.summons || []).filter(s => !s.dead);
+      if (e.summons.length < 2) {
+        e.summons.push(g.spawnEnemy(g.floor >= 4 ? 'bat' : 'slime', e.x + rand(-50, 50), e.y + rand(-50, 50), 0.6));
+        Sfx.play('summon');
+      } else g.enemyShot(e.x, e.y, angle(e, p), 240, 8, '#a78bfa');
+    }
+    if (e.tp <= 0) {
+      e.tp = rand(5, 7);
+      const spot = g.freeSpot(260);
+      if (spot) {
+        g.spark(e.x, e.y, '#a78bfa', 14, 160, 3);
+        e.x = spot.x;
+        e.y = spot.y;
+        g.spark(e.x, e.y, '#a78bfa', 14, 160, 3);
+      }
+    }
+  },
   chase(e, dt, g) {
     const d = chaseDir(e, g);
     e.vx = d.x * e.speed;

@@ -1,4 +1,5 @@
-import { TAU, rand, angle } from '../core/utils.js';
+import { TAU, TILE, rand, angle } from '../core/utils.js';
+import { Settings } from '../core/settings.js';
 
 export const FONT = '"Outfit", "Trebuchet MS", "Segoe UI", system-ui, sans-serif';
 export const TFONT = '"Cinzel", Georgia, serif';
@@ -63,7 +64,7 @@ export function drawPlayer(ctx, p, t) {
   if (p.hp <= 0) return;
   const C = p.char;
   shadow(ctx, p.x, p.y + p.r * 0.9, p.r);
-  if (p.iframes > 0 && p.dashTime <= 0 && Math.floor(p.iframes * 18) % 2 === 0) return;
+  if (p.iframes > 0 && p.dashTime <= 0 && !(p.shield > 0) && Math.floor(p.iframes * 18) % 2 === 0) return;
   const bob = p.moving ? Math.sin(p.walkT * 14) * 1.8 : Math.sin(t * 3) * 0.8;
   const ax = Math.cos(p.aim),
     ay = Math.sin(p.aim);
@@ -147,6 +148,18 @@ export function drawPlayer(ctx, p, t) {
   }
   if (ay >= 0) weapon();
   ctx.restore();
+  if (p.shield > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.25 + Math.sin(t * 10) * 0.08;
+    circle(ctx, p.x, p.y, p.r + 12, '#fde047');
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = '#fef08a';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r + 12, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+  }
   if (p.dashT > 0) {
     const k = 1 - p.dashT / p.dashCooldown;
     ctx.globalAlpha = 0.7;
@@ -191,6 +204,51 @@ export function eyes(ctx, e, g, sp, y, size = 3, col = '#111') {
 }
 
 export const BODY = {
+  bomber(ctx, e, g, c) {
+    circle(ctx, 0, 0, e.r, c);
+    ctx.fillStyle = '#3f6212';
+    ctx.beginPath();
+    ctx.moveTo(-e.r * 0.9, -4);
+    ctx.lineTo(-e.r * 1.5, -e.r * 0.9);
+    ctx.lineTo(-e.r * 0.4, -e.r * 0.6);
+    ctx.moveTo(e.r * 0.9, -4);
+    ctx.lineTo(e.r * 1.5, -e.r * 0.9);
+    ctx.lineTo(e.r * 0.4, -e.r * 0.6);
+    ctx.fill();
+    eyes(ctx, e, g, 5, -3, 2.2, '#7f1d1d');
+    ctx.fillStyle = '#1c1917';
+    ctx.fillRect(-5, 5, 10, 3);
+    // bombe tenue au-dessus de la tête avant le lancer
+    if (e.winding) {
+      const by = -e.r - 10 - Math.sin(e.t * 30) * 2;
+      circle(ctx, 0, by, 8, '#1c1917');
+      circle(ctx, 5, by - 8, 2.5 + Math.random() * 1.5, '#fde047');
+    }
+  },
+  necro(ctx, e, g, c) {
+    if (e.casting) {
+      ctx.globalAlpha *= 0.5 + Math.sin(e.t * 20) * 0.2;
+      circle(ctx, 0, 0, e.r + 10, '#a78bfa');
+      ctx.globalAlpha = Math.min(1, ctx.globalAlpha * 2);
+    }
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    ctx.moveTo(-e.r, e.r);
+    ctx.lineTo(0, -e.r * 1.3);
+    ctx.lineTo(e.r, e.r);
+    ctx.closePath();
+    ctx.fill();
+    circle(ctx, 0, -e.r * 0.2, e.r * 0.5, '#0b0612');
+    circle(ctx, -3.5, -e.r * 0.25, 2, '#c4b5fd');
+    circle(ctx, 3.5, -e.r * 0.25, 2, '#c4b5fd');
+    ctx.strokeStyle = '#d6d3d1';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(e.r * 0.9, e.r);
+    ctx.lineTo(e.r * 0.9, -e.r);
+    ctx.stroke();
+    circle(ctx, e.r * 0.9, -e.r - 3, 4, e.casting ? '#e9d5ff' : '#7c3aed');
+  },
   slime(ctx, e, g, c) {
     const sq = Math.sin(e.t * 8 + e.seed) * 0.08;
     ctx.scale(1 + sq, 1 - sq);
@@ -455,6 +513,13 @@ export function drawEnemy(ctx, e, g) {
 }
 
 export function drawBullet(ctx, b) {
+  if (!b.friendly && Settings.contrastShots) {
+    // mode contrasté : contour noir épais, centre blanc, liseré coloré
+    circle(ctx, b.x, b.y, b.r + 4, '#000');
+    circle(ctx, b.x, b.y, b.r + 1.5, '#fff');
+    circle(ctx, b.x, b.y, b.r * 0.55, b.color);
+    return;
+  }
   ctx.globalAlpha = 0.3;
   circle(ctx, b.x, b.y, b.r * 2, b.color);
   ctx.globalAlpha = 1;
@@ -493,4 +558,78 @@ export function wrapText(ctx, str, maxW) {
   }
   if (line) lines.push(line);
   return lines;
+}
+
+export function drawKey(ctx, x, y, s = 1) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s, s);
+  ctx.strokeStyle = '#78350f';
+  ctx.lineWidth = 6;
+  ctx.beginPath();
+  ctx.arc(-6, 0, 6, 0, TAU);
+  ctx.moveTo(0, 0);
+  ctx.lineTo(13, 0);
+  ctx.lineTo(13, 6);
+  ctx.moveTo(8, 0);
+  ctx.lineTo(8, 5);
+  ctx.stroke();
+  ctx.strokeStyle = '#fbbf24';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.restore();
+}
+
+export function drawChest(ctx, x, y, gold, open, t) {
+  shadow(ctx, x, y + 16, 24);
+  const body = gold ? '#ca8a04' : '#92400e',
+    trim = gold ? '#fde047' : '#78716c',
+    dark = gold ? '#854d0e' : '#451a03';
+  ctx.fillStyle = dark;
+  roundRect(ctx, x - 22, y - 6, 44, 24, 4);
+  ctx.fill();
+  ctx.fillStyle = body;
+  roundRect(ctx, x - 22, y - 4, 44, 20, 4);
+  ctx.fill();
+  if (open) {
+    ctx.fillStyle = '#0c0a09';
+    ctx.fillRect(x - 19, y - 8, 38, 6);
+    ctx.fillStyle = body;
+    roundRect(ctx, x - 22, y - 24, 44, 12, 4);
+    ctx.fill();
+  } else {
+    ctx.fillStyle = body;
+    roundRect(ctx, x - 22, y - 18, 44, 16, 6);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x - 18, y - 15, 36, 3);
+  }
+  ctx.fillStyle = trim;
+  ctx.fillRect(x - 22, y - 5, 44, 3);
+  ctx.fillRect(x - 3, y - 6, 6, 10);
+  if (!open && gold) {
+    ctx.globalAlpha = 0.25 + Math.sin(t * 4) * 0.12;
+    circle(ctx, x, y, 30, '#fde047');
+    ctx.globalAlpha = 1;
+  }
+}
+
+/** Pointes : 0 = rentrées, entre 0 et 1 = sortent (alerte), 1 = sorties */
+export function drawSpikes(ctx, tx, ty, level) {
+  if (level <= 0) return;
+  const px = tx * TILE,
+    py = ty * TILE;
+  for (let i = 0; i < 3; i++)
+    for (let j = 0; j < 3; j++) {
+      const cx = px + 16 + i * 16,
+        cy = py + 16 + j * 16,
+        h = 12 * level;
+      ctx.fillStyle = level >= 1 ? '#e7e5e4' : '#a8a29e';
+      ctx.beginPath();
+      ctx.moveTo(cx - 4, cy + 2);
+      ctx.lineTo(cx, cy + 2 - h);
+      ctx.lineTo(cx + 4, cy + 2);
+      ctx.closePath();
+      ctx.fill();
+    }
 }

@@ -201,6 +201,19 @@ export const ITEMS = [
 ];
 export const ITEM_BY_ID = Object.fromEntries(ITEMS.map(i => [i.id, i]));
 
+// Objets actifs : un seul à la fois, rechargés en nettoyant des salles
+export const ACTIVES = [
+  { id: 'hourglass', name: 'Sablier', desc: 'Ralentit ennemis et projectiles pendant 5 s', icon: '⏳', charge: 3 },
+  { id: 'firetome', name: 'Grimoire de feu', desc: 'Libère un anneau de flammes perçantes', icon: '📕', charge: 2 },
+  { id: 'potion', name: 'Potion rouge', desc: 'Rend 1 cœur', icon: '🧪', charge: 4 },
+  { id: 'aegis', name: 'Égide', desc: 'Invincible pendant 3 secondes', icon: '🔰', charge: 3 },
+  { id: 'megabomb', name: 'Bombe géante', desc: 'Pose une bombe dévastatrice', icon: '🧨', charge: 3 },
+];
+export const ACTIVE_BY_ID = Object.fromEntries(ACTIVES.map(i => [i.id, i]));
+/** Tout ce qui peut être découvert (objets passifs et actifs) */
+export const ALL_ITEMS = [...ITEMS, ...ACTIVES];
+export const anyItem = id => ITEM_BY_ID[id] || ACTIVE_BY_ID[id];
+
 export const CHARACTERS = [
   {
     id: 'mage',

@@ -45,6 +45,54 @@ export function mulberry32(a) {
   };
 }
 
+/** Générateur pseudo-aléatoire reproductible, avec les mêmes helpers que le hasard global. */
+export function makeRng(seed) {
+  const next = mulberry32(seed >>> 0);
+  return {
+    next,
+    rand: (a, b) => a + next() * (b - a),
+    randi: (a, b) => Math.floor(a + next() * (b - a + 1)),
+    chance: p => next() < p,
+    choice: arr => arr[Math.floor(next() * arr.length)],
+    shuffle(arr) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(next() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    },
+  };
+}
+
+/** Hachage FNV-1a d'une chaîne vers un entier 32 bits. */
+export function hashSeed(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+const SEED_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+export function randomSeed(len = 6) {
+  let s = '';
+  for (let i = 0; i < len; i++) s += SEED_CHARS[Math.floor(Math.random() * SEED_CHARS.length)];
+  return s;
+}
+export function sanitizeSeed(str) {
+  return String(str || '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 12);
+}
+export function dailySeed(date = new Date()) {
+  const y = date.getFullYear(),
+    m = String(date.getMonth() + 1).padStart(2, '0'),
+    d = String(date.getDate()).padStart(2, '0');
+  return `JOUR${y}${m}${d}`;
+}
+
 export const Store = {
   get(k, d) {
     try {

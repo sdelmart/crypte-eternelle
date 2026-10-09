@@ -9,5 +9,5 @@ Thumbs.db
 
 # Dépendances (si un outil de build est ajouté plus tard)
 node_modules/
-dist/
+
 dist/

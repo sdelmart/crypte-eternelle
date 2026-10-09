@@ -1,7 +1,9 @@
-import { TILE, W, H, HUD_H, RW, RH, DOORS, OPP, DIRS, TAU, rand, clamp, dist } from '../core/utils.js';
-import { Settings, Sfx, saveSettings } from '../core/audio.js';
-import { Input } from '../core/input.js';
-import { ITEMS, ITEM_BY_ID, CHARACTERS, META_UPS } from '../data/items.js';
+import { TILE, W, H, HUD_H, RW, RH, DOORS, OPP, DIRS, TAU, rand, clamp, dist, lerp } from '../core/utils.js';
+import { Settings, saveSettings, DEFAULT_KEYS } from '../core/settings.js';
+import { Sfx } from '../core/audio.js';
+import { Input, ACTIONS, ACTION_LABELS, TOUCH_BUTTONS, keyLabel } from '../core/input.js';
+import { ITEM_BY_ID, ACTIVE_BY_ID, ALL_ITEMS, CHARACTERS, META_UPS, anyItem } from '../data/items.js';
+import { ACHIEVEMENTS } from '../data/achievements.js';
 import { THEMES } from '../world/dungeon.js';
 import { Player } from '../world/entities.js';
 import {
@@ -17,15 +19,49 @@ import {
   drawEnemy,
   drawBullet,
   drawItemIcon,
+  drawKey,
+  drawChest,
+  drawSpikes,
   text,
   wrapText,
 } from '../render/render.js';
-import { Game, MAX_FLOOR, MENU_STATES } from './game.js';
+import { Game, MAX_FLOOR, MENU_STATES, TUTORIAL_STEPS } from './game.js';
 
 export const fmtTime = s => {
   s = Math.floor(s);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
+const DOOR_ROT = { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 };
+const DOOR_COLORS = { boss: '#dc2626', treasure: '#fbbf24', shop: '#38bdf8', secret: '#fde047', challenge: '#a855f7' };
+const DOOR_ICONS = { boss: '💀', treasure: '👑', shop: '🪙', challenge: '⚔️' };
+const CREDITS = [
+  ['title', 'CRYPTE ÉTERNELLE'],
+  ['gap'],
+  ['head', 'Conception, programmation et design'],
+  ['line', 'Scott'],
+  ['gap'],
+  ['head', 'Musique et effets sonores'],
+  ['line', 'Générés en temps réel avec la Web Audio API'],
+  ['gap'],
+  ['head', 'Polices'],
+  ['line', 'Cinzel — Natanael Gama'],
+  ['line', 'Outfit — Rodrigo Fuenzalida'],
+  ['line', 'SIL Open Font License'],
+  ['gap'],
+  ['head', 'Outils'],
+  ['line', 'JavaScript, Canvas 2D, Vite, Vitest, ESLint, Prettier'],
+  ['gap'],
+  ['gap'],
+  ['title', "Merci d'avoir joué !"],
+];
+
+/** Texte d'une touche selon l'appareil utilisé */
+function bindText(action) {
+  const pad = { dash: 'A', bomb: 'X', active: 'Y', map: 'Select' };
+  if (Input.lastDevice === 'pad') return pad[action] || action;
+  if (Input.lastDevice === 'touch') return { dash: '💨', bomb: '💣', active: '✦', map: 'haut de l’écran' }[action] || action;
+  return keyLabel(Settings.keys[action]);
+}
 
 Object.assign(Game, {
   draw(ctx) {
@@ -33,27 +69,39 @@ Object.assign(Game, {
     ctx.fillStyle = '#07060b';
     ctx.fillRect(0, 0, W, H);
     const s = this.state;
-    if (MENU_STATES.includes(s) || (s === 'settings' && this.settingsReturn === 'menu')) {
+    const overMenu = (s === 'settings' || s === 'controls') && this.settingsReturn === 'menu';
+    if (MENU_STATES.includes(s) || overMenu) {
       this.drawBackdrop(ctx);
-      ({ menu: this.drawMenu, meta: this.drawMeta, codex: this.drawCodex, select: this.drawSelect, settings: this.drawSettings })[s].call(
-        this,
-        ctx,
-      );
+      const fn = {
+        menu: this.drawMenu,
+        meta: this.drawMeta,
+        codex: this.drawCodex,
+        select: this.drawSelect,
+        settings: this.drawSettings,
+        controls: this.drawControls,
+      }[s];
+      fn.call(this, ctx);
+    } else if (s === 'credits') {
+      this.drawBackdrop(ctx);
+      this.drawCredits(ctx);
     } else {
       this.drawPlay(ctx);
       if (s === 'paused') this.drawPause(ctx);
-      if (s === 'settings') {
-        ctx.fillStyle = 'rgba(5,4,8,0.82)';
+      if (s === 'settings' || s === 'controls') {
+        ctx.fillStyle = 'rgba(5,4,8,0.85)';
         ctx.fillRect(0, 0, W, H);
-        this.drawSettings(ctx);
+        (s === 'settings' ? this.drawSettings : this.drawControls).call(this, ctx);
       }
       if (s === 'dead' || s === 'victory') this.drawEnd(ctx);
     }
+    this.drawAchToast(ctx);
+    if (Settings.showFps) text(ctx, `${Math.round(this.fps)} FPS`, 8, H - 8, 11, '#94a3b8', 'left', 'normal');
     if (this.fade > 0) {
       ctx.fillStyle = `rgba(7,6,11,${this.fade / 0.35})`;
       ctx.fillRect(0, 0, W, H);
     }
-    const cursor = s === 'playing' && Input.lastDevice !== 'pad' ? 'none' : Input.lastDevice === 'pad' ? 'none' : 'default';
+    const hide = Input.lastDevice === 'pad' || Input.lastDevice === 'touch' || s === 'playing';
+    const cursor = hide ? 'none' : 'default';
     if (this.canvas && this.canvas.style.cursor !== cursor) this.canvas.style.cursor = cursor;
   },
 
@@ -96,9 +144,9 @@ Object.assign(Game, {
     ctx.fillStyle = fg;
     if (opts.value !== undefined) {
       ctx.textAlign = 'left';
-      ctx.fillText(label, x + 20, y + h / 2 + 1);
+      ctx.fillText(label, x + 18, y + h / 2 + 1);
       ctx.textAlign = 'right';
-      ctx.fillText(opts.value, x + w - 20, y + h / 2 + 1);
+      ctx.fillText(opts.value, x + w - 18, y + h / 2 + 1);
     } else {
       ctx.textAlign = 'center';
       ctx.fillText(label, x + w / 2, y + h / 2 + 1);
@@ -132,7 +180,16 @@ Object.assign(Game, {
     ctx.restore();
   },
   hint(ctx, str) {
+    if (Input.lastDevice === 'touch') return;
     text(ctx, str, W / 2, H - 16, 12, '#6b7280', 'center', 'normal');
+  },
+  panel(ctx, x, y, w, h, stroke = 'rgba(255,255,255,0.12)') {
+    ctx.fillStyle = 'rgba(18,13,28,0.92)';
+    roundRect(ctx, x, y, w, h, 12);
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
   },
 
   // ---------------- EN JEU ----------------
@@ -146,32 +203,11 @@ Object.assign(Game, {
     ctx.translate(0, HUD_H);
     ctx.drawImage(room.canvas, 0, 0, RW, RH);
     this.drawDoors(ctx);
-
-    if (room.type === 'start' && this.floor === 1) {
-      ctx.globalAlpha = 0.3;
-      const pad = Input.lastDevice === 'pad';
-      text(
-        ctx,
-        pad ? 'Stick gauche : bouger   ·   Stick droit : tirer' : 'ZQSD : bouger   ·   Souris ou flèches : tirer',
-        RW / 2,
-        RH / 2 - 60,
-        18,
-        '#fff',
-        'center',
-        'normal',
-      );
-      text(
-        ctx,
-        pad ? 'A : dash   ·   X : bombe   ·   Start : pause' : 'Espace : dash   ·   E : bombe   ·   Tab : carte',
-        RW / 2,
-        RH / 2 - 32,
-        18,
-        '#fff',
-        'center',
-        'normal',
-      );
-      ctx.globalAlpha = 1;
+    if (room.spikes.length) {
+      const lvl = this.spikeLevel();
+      for (const sp of room.spikes) drawSpikes(ctx, sp.tx, sp.ty, lvl);
     }
+
     if (room.type === 'shop') this.drawShopkeeper(ctx);
     if (room.type === 'secret') {
       ctx.globalAlpha = 0.25;
@@ -179,19 +215,7 @@ Object.assign(Game, {
       ctx.globalAlpha = 1;
     }
     if (room.trapdoor) this.drawTrapdoor(ctx, room.trapdoor);
-    for (const h of this.hazards) {
-      const k = 1 - h.t / h.max;
-      ctx.fillStyle = `rgba(0,0,0,${0.2 + k * 0.35})`;
-      ctx.beginPath();
-      ctx.ellipse(h.x, h.y, h.r * k, h.r * k * 0.5, 0, 0, TAU);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(239,68,68,0.6)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.ellipse(h.x, h.y, h.r, h.r * 0.5, 0, 0, TAU);
-      ctx.stroke();
-      if (k > 0.5) circle(ctx, h.x, h.y - (1 - k) * 400, 14, this.theme.rock);
-    }
+    for (const h of this.hazards) this.drawHazard(ctx, h);
     for (const k of room.pickups) this.drawPickup(ctx, k);
     for (const b of this.bombs) {
       drawBomb(ctx, b, this.t);
@@ -199,13 +223,16 @@ Object.assign(Game, {
       ctx.strokeStyle = '#ef4444';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(b.x, b.y, 95, 0, TAU);
+      ctx.arc(b.x, b.y, b.r, 0, TAU);
       ctx.stroke();
       ctx.globalAlpha = 1;
     }
 
     const actors = [...this.enemies, p].sort((a, b) => a.y - b.y);
-    for (const a of actors) a === p ? drawPlayer(ctx, p, this.t) : drawEnemy(ctx, a, this);
+    for (const a of actors) {
+      if (a === p) drawPlayer(ctx, p, this.t);
+      else drawEnemy(ctx, a, this);
+    }
 
     if (p.hp > 0)
       for (let i = 0; i < p.orbitals; i++) {
@@ -219,8 +246,10 @@ Object.assign(Game, {
         circle(ctx, x - 2, y - 2, 3, '#fff');
       }
 
-    ctx.globalCompositeOperation = 'lighter';
-    for (const b of this.bullets) drawBullet(ctx, b);
+    if (!Settings.contrastShots) ctx.globalCompositeOperation = 'lighter';
+    for (const b of this.bullets) if (b.friendly) drawBullet(ctx, b);
+    ctx.globalCompositeOperation = Settings.contrastShots ? 'source-over' : 'lighter';
+    for (const b of this.bullets) if (!b.friendly) drawBullet(ctx, b);
     ctx.globalCompositeOperation = 'source-over';
 
     for (const q of this.particles) {
@@ -252,27 +281,34 @@ Object.assign(Game, {
     g.addColorStop(1, `rgba(0,0,0,${this.dying ? 0.85 : 0.6})`);
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, RW, RH);
+    if (this.timeWarp > 0) {
+      ctx.fillStyle = `rgba(56,189,248,${0.1 * Math.min(1, this.timeWarp)})`;
+      ctx.fillRect(0, 0, RW, RH);
+    }
 
     this.drawNearbyLabel(ctx);
     this.drawMinimap(ctx, this.bigMap);
+    this.drawActiveBox(ctx);
     ctx.restore();
 
     this.drawHUD(ctx);
     ctx.restore();
 
     if (this.bossRef && !this.bossRef.dead && this.enemies.includes(this.bossRef)) this.drawBossBar(ctx, this.bossRef);
-    if (this.flash > 0) {
+    if (this.flash > 0 && !Settings.reduceFlash) {
       ctx.fillStyle = `rgba(220,20,40,${this.flash * 0.45})`;
       ctx.fillRect(0, 0, W, H);
     }
     if (p.hp <= 2 && p.hp > 0) {
-      const a = 0.18 + Math.sin(this.t * 6) * 0.08;
+      const a = Settings.reduceFlash ? 0.16 : 0.18 + Math.sin(this.t * 6) * 0.08;
       const v = ctx.createRadialGradient(W / 2, H / 2, 250, W / 2, H / 2, 600);
       v.addColorStop(0, 'rgba(0,0,0,0)');
       v.addColorStop(1, `rgba(180,0,20,${a})`);
       ctx.fillStyle = v;
       ctx.fillRect(0, 0, W, H);
     }
+    if (this.state === 'playing' && Input.lastDevice === 'touch') this.drawTouchControls(ctx);
+    this.drawTutorial(ctx);
     this.drawToast(ctx);
     this.drawBanner(ctx);
     if (this.trans) {
@@ -280,7 +316,36 @@ Object.assign(Game, {
       ctx.fillStyle = `rgba(7,6,11,${clamp(k, 0, 1)})`;
       ctx.fillRect(0, 0, W, H);
     }
-    if (this.state === 'playing' && Input.lastDevice !== 'pad') this.drawCrosshair(ctx);
+    if (this.state === 'playing' && (Input.lastDevice === 'mouse' || Input.lastDevice === 'keys')) this.drawCrosshair(ctx);
+  },
+
+  drawHazard(ctx, h) {
+    const k = 1 - h.t / h.max;
+    if (h.kind === 'lob') {
+      ctx.globalAlpha = 0.25 + k * 0.35;
+      circle(ctx, h.x, h.y, h.r * (0.4 + k * 0.6), '#ef4444');
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = '#fca5a5';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, h.r, 0, TAU);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const bx = lerp(h.x0, h.x, k),
+        by = lerp(h.y0, h.y, k) - Math.sin(k * Math.PI) * 130;
+      drawBomb(ctx, { x: bx, y: by, t: h.t, max: h.max }, this.t);
+      return;
+    }
+    ctx.fillStyle = `rgba(0,0,0,${0.2 + k * 0.35})`;
+    ctx.beginPath();
+    ctx.ellipse(h.x, h.y, h.r * k, h.r * k * 0.5, 0, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(239,68,68,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(h.x, h.y, h.r, h.r * 0.5, 0, 0, TAU);
+    ctx.stroke();
+    if (k > 0.5) circle(ctx, h.x, h.y - (1 - k) * 400, 14, this.theme.rock);
   },
 
   drawCrosshair(ctx) {
@@ -311,18 +376,115 @@ Object.assign(Game, {
     ctx.restore();
   },
 
+  drawTouchControls(ctx) {
+    const T = Input.touch,
+      p = this.player;
+    const stick = (ox, oy, x, y, active) => {
+      ctx.globalAlpha = active ? 0.35 : 0.14;
+      circle(ctx, ox, oy, 60, '#fff');
+      ctx.globalAlpha = active ? 0.7 : 0.25;
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ox, oy, 60, 0, TAU);
+      ctx.stroke();
+      const d = Math.hypot(x - ox, y - oy),
+        k = d > 60 ? 60 / d : 1;
+      circle(ctx, ox + (x - ox) * k, oy + (y - oy) * k, 26, p.char.body);
+      ctx.globalAlpha = 1;
+    };
+    const sticks = [...T.sticks.values()];
+    const mv = sticks.find(s => s.side === 'move'),
+      am = sticks.find(s => s.side === 'aim');
+    if (mv) stick(mv.ox, mv.oy, mv.x, mv.y, true);
+    else stick(130, H - 130, 130, H - 130, false);
+    if (am) stick(am.ox, am.oy, am.x, am.y, true);
+    else stick(W - 260, H - 120, W - 260, H - 120, false);
+    for (const b of TOUCH_BUTTONS) {
+      if (b.id === 'active' && !p.active) continue;
+      const held = T.held.has(b.id);
+      ctx.globalAlpha = held ? 0.55 : 0.3;
+      circle(ctx, b.x, b.y, b.r, b.id === 'pause' ? '#000' : '#1e1b2e');
+      ctx.globalAlpha = 0.8;
+      ctx.strokeStyle = b.id === 'dash' ? p.char.body : '#e5e7eb';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, b.r, 0, TAU);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (b.id === 'active') {
+        const a = p.active,
+          def = ACTIVE_BY_ID[a.id];
+        drawItemIcon(ctx, def.icon, b.x, b.y, 24);
+        ctx.strokeStyle = a.charge >= a.max ? '#fde047' : '#64748b';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r + 5, -Math.PI / 2, -Math.PI / 2 + (TAU * a.charge) / a.max);
+        ctx.stroke();
+      } else if (b.id === 'pause') text(ctx, 'II', b.x, b.y + 6, 16, '#fff');
+      else drawItemIcon(ctx, b.icon, b.x, b.y, b.r * 0.8);
+      if (b.id === 'bomb') text(ctx, String(p.bombs), b.x + b.r - 4, b.y + b.r - 2, 14, '#fff');
+      if (b.id === 'dash' && p.dashT > 0) {
+        ctx.strokeStyle = p.char.body;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, b.r + 5, -Math.PI / 2, -Math.PI / 2 + TAU * (1 - p.dashT / p.dashCooldown));
+        ctx.stroke();
+      }
+    }
+  },
+
+  drawTutorial(ctx) {
+    if (!this.tut || this.state !== 'playing') return;
+    const step = TUTORIAL_STEPS[this.tut.step];
+    const touch = Input.lastDevice === 'touch',
+      pad = Input.lastDevice === 'pad';
+    const move = touch
+      ? 'Glisse ton pouce à gauche de l’écran pour te déplacer'
+      : pad
+        ? 'Utilise le stick gauche pour te déplacer'
+        : `Déplace-toi avec ${['up', 'left', 'down', 'right'].map(a => keyLabel(Settings.keys[a])).join(' ')}`;
+    const shoot = touch
+      ? 'Glisse ton pouce à droite de l’écran pour viser et tirer'
+      : pad
+        ? 'Vise et tire avec le stick droit'
+        : 'Vise avec la souris et maintiens le clic (ou les flèches) pour tirer';
+    const msg = {
+      move,
+      shoot,
+      dash: `Fais un dash avec ${bindText('dash')} : tu es invincible pendant le dash`,
+      bomb: `Pose une bombe avec ${bindText('bomb')} : elles brisent les rochers et ouvrent les passages secrets`,
+      explore: 'Franchis une porte pour explorer le donjon',
+    }[step];
+    if (!msg) return;
+    const a = Math.min(1, this.tut.t * 3);
+    ctx.globalAlpha = a;
+    ctx.font = `600 16px ${FONT}`;
+    const w = Math.min(W - 40, ctx.measureText(msg).width + 60),
+      x = (W - w) / 2,
+      y = H - 112;
+    ctx.fillStyle = 'rgba(10,8,16,0.88)';
+    roundRect(ctx, x, y, w, 58, 12);
+    ctx.fill();
+    ctx.strokeStyle = this.player.char.body;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    text(ctx, `TUTORIEL  ${this.tut.step + 1} / ${TUTORIAL_STEPS.length}`, W / 2, y + 20, 11, this.player.char.body);
+    text(ctx, msg, W / 2, y + 43, 16, '#fff', 'center', '600');
+    ctx.globalAlpha = 1;
+  },
+
   drawDoors(ctx) {
     const room = this.room;
-    const col = { boss: '#dc2626', treasure: '#fbbf24', shop: '#38bdf8', secret: '#fde047' };
     for (const d in room.doors) {
       if (room.hidden[d]) continue;
       const D = DOORS[d],
         x = D.tx * TILE,
         y = D.ty * TILE;
-      const frame = col[room.doorTypes[d]] || col[room.type] || this.theme.wallTop;
+      const frame = DOOR_COLORS[room.doorTypes[d]] || DOOR_COLORS[room.type] || this.theme.wallTop;
       ctx.save();
       ctx.translate(x + TILE / 2, y + TILE / 2);
-      ctx.rotate({ up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[d]);
+      ctx.rotate(DOOR_ROT[d]);
       ctx.fillStyle = frame;
       ctx.fillRect(-TILE / 2 - 6, -TILE / 2, 8, TILE);
       ctx.fillRect(TILE / 2 - 2, -TILE / 2, 8, TILE);
@@ -336,9 +498,9 @@ Object.assign(Game, {
         for (let i = 0; i < 4; i++) ctx.fillRect(-TILE / 2 + 8 + i * 14, -TILE / 2 + 6, 5, TILE - 8);
         ctx.fillRect(-TILE / 2 + 2, -4, TILE - 4, 6);
       }
-      const icon = { boss: '💀', treasure: '👑', shop: '🪙' }[room.doorTypes[d]];
+      const icon = DOOR_ICONS[room.doorTypes[d]];
       if (icon) {
-        ctx.rotate(-{ up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[d]);
+        ctx.rotate(-DOOR_ROT[d]);
         drawItemIcon(ctx, icon, 0, 0, 18);
       }
       ctx.restore();
@@ -401,37 +563,50 @@ Object.assign(Game, {
     text(ctx, "Marché noir — marche sur un objet pour l'acheter", x, TILE * 1.6 + 52, 14, '#93c5fd', 'center', 'normal');
   },
 
+  pickupIcon(k) {
+    if (k.kind === 'heart' || k.id === 'heart') return '❤️';
+    if (k.kind === 'bomb') return '💣';
+    if (k.kind === 'key') return '🗝️';
+    return anyItem(k.id).icon;
+  },
   drawPickup(ctx, k) {
     const bob = Math.sin(this.t * 3 + k.x) * 4;
-    if (k.type === 'coin') {
-      shadow(ctx, k.x, k.y + 8, 7);
-      drawCoin(ctx, k.x, k.y + bob * 0.5, 7);
-      return;
+    switch (k.type) {
+      case 'coin':
+        shadow(ctx, k.x, k.y + 8, 7);
+        drawCoin(ctx, k.x, k.y + bob * 0.5, 7);
+        return;
+      case 'heart':
+        shadow(ctx, k.x, k.y + 12, 10);
+        drawHeart(ctx, k.x, k.y - 10 + bob * 0.5, 20, 1);
+        return;
+      case 'bomb':
+        drawBomb(ctx, { x: k.x, y: k.y + bob * 0.4, t: 1, max: 1 }, 0);
+        return;
+      case 'key':
+        shadow(ctx, k.x, k.y + 10, 9);
+        drawKey(ctx, k.x, k.y + bob * 0.5, 1.1);
+        return;
+      case 'chest':
+        drawChest(ctx, k.x, k.y, k.gold, k.open, this.t);
+        if (k.gold && !k.open) drawKey(ctx, k.x + 26, k.y - 26, 0.7);
+        return;
     }
-    if (k.type === 'heart') {
-      shadow(ctx, k.x, k.y + 12, 10);
-      drawHeart(ctx, k.x, k.y - 10 + bob * 0.5, 20, 1);
-      return;
-    }
-    if (k.type === 'bomb') {
-      drawBomb(ctx, { x: k.x, y: k.y + bob * 0.4, t: 1, max: 1 }, 0);
-      return;
-    }
-    const icon = k.id === 'heart' ? '❤️' : k.id === 'bomb' ? '💣' : ITEM_BY_ID[k.id].icon;
-    if (k.type === 'item') {
+    if (k.type === 'item' || (k.type === 'active' && k.pedestal)) {
       ctx.fillStyle = '#44403c';
       ctx.fillRect(k.x - 20, k.y + 4, 40, 22);
       ctx.fillStyle = '#57534e';
       ctx.fillRect(k.x - 24, k.y, 48, 8);
-    } else {
+    } else if (k.type === 'shop') {
       ctx.fillStyle = 'rgba(30,58,138,0.5)';
       roundRect(ctx, k.x - 34, k.y - 34, 68, 72, 8);
       ctx.fill();
-    }
+    } else shadow(ctx, k.x, k.y + 10, 14);
+    const isActive = k.type === 'active' || k.kind === 'active';
     ctx.globalAlpha = 0.25 + Math.sin(this.t * 4) * 0.1;
-    circle(ctx, k.x, k.y - 16 + bob, 24, '#fde047');
+    circle(ctx, k.x, k.y - 16 + bob, 24, isActive ? '#38bdf8' : '#fde047');
     ctx.globalAlpha = 1;
-    drawItemIcon(ctx, icon, k.x, k.y - 16 + bob, 30);
+    drawItemIcon(ctx, this.pickupIcon(k), k.x, k.y - 16 + bob, 30);
     if (k.type === 'shop') {
       drawCoin(ctx, k.x - 14, k.y + 26, 6);
       text(ctx, String(k.price), k.x + 6, k.y + 32, 16, this.player.coins >= k.price ? '#fde047' : '#f87171', 'center');
@@ -441,14 +616,14 @@ Object.assign(Game, {
   drawNearbyLabel(ctx) {
     const p = this.player;
     for (const k of this.room.pickups) {
-      if ((k.type !== 'item' && k.type !== 'shop') || dist(k, p) > 110) continue;
-      const it =
-        k.id === 'heart'
-          ? { name: 'Cœur', desc: 'Rend 1 cœur' }
-          : k.id === 'bomb'
-            ? { name: 'Bombe', desc: 'Brise les rochers et révèle les passages secrets' }
-            : ITEM_BY_ID[k.id];
-      this.tooltip(ctx, k.x, k.y - 96, it.name, it.desc);
+      if (!['item', 'shop', 'active'].includes(k.type) || dist(k, p) > 110) continue;
+      let it;
+      if (k.kind === 'heart') it = { name: 'Cœur', desc: 'Rend 1 cœur' };
+      else if (k.kind === 'bomb') it = { name: 'Bombe', desc: 'Brise les rochers et révèle les passages secrets' };
+      else if (k.kind === 'key') it = { name: 'Clé', desc: 'Ouvre les coffres dorés' };
+      else it = anyItem(k.id);
+      const isActive = k.type === 'active' || k.kind === 'active';
+      this.tooltip(ctx, k.x, k.y - 96, isActive ? `${it.name} · objet actif` : it.name, it.desc, isActive ? '#7dd3fc' : '#fde047');
     }
   },
 
@@ -474,7 +649,7 @@ Object.assign(Game, {
         return nb && nb.visited && !nb.hidden[OPP[d]];
       });
     };
-    const icons = { boss: '💀', treasure: '👑', shop: '🪙', secret: '✦' };
+    const icons = { boss: '💀', treasure: '👑', shop: '🪙', challenge: '⚔️' };
     for (const r of this.dungeon.rooms.values()) {
       const dx = r.gx - cur.gx,
         dy = r.gy - cur.gy;
@@ -484,12 +659,39 @@ Object.assign(Game, {
       ctx.fillStyle = r === cur ? '#f5f5f4' : r.visited ? '#6b6580' : '#2e2a3a';
       roundRect(ctx, x, y, cw, ch, 3);
       ctx.fill();
-      if (icons[r.type] && r !== cur) {
+      if (r !== cur) {
         if (r.type === 'secret') text(ctx, '✦', x + cw / 2, y + ch / 2 + (big ? 6 : 4), big ? 16 : 10, '#fde047');
-        else drawItemIcon(ctx, icons[r.type], x + cw / 2, y + ch / 2 + 1, big ? 16 : 10);
+        else if (icons[r.type]) drawItemIcon(ctx, icons[r.type], x + cw / 2, y + ch / 2 + 1, big ? 16 : 10);
       }
     }
     if (big) text(ctx, 'CARTE', RW / 2, y0 - 14, 16, '#e5e7eb');
+  },
+
+  drawActiveBox(ctx) {
+    const a = this.player.active;
+    if (!a || Input.lastDevice === 'touch') return;
+    const def = ACTIVE_BY_ID[a.id],
+      x = 10,
+      y = RH - 70,
+      ready = a.charge >= a.max;
+    ctx.fillStyle = 'rgba(5,4,8,0.7)';
+    roundRect(ctx, x, y, 62, 62, 10);
+    ctx.fill();
+    ctx.strokeStyle = ready ? '#fde047' : '#475569';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (ready) {
+      ctx.globalAlpha = 0.25 + Math.sin(this.t * 5) * 0.1;
+      circle(ctx, x + 31, y + 27, 22, '#fde047');
+      ctx.globalAlpha = 1;
+    }
+    drawItemIcon(ctx, def.icon, x + 31, y + 27, 28);
+    for (let i = 0; i < a.max; i++) {
+      const w = (50 - (a.max - 1) * 3) / a.max;
+      ctx.fillStyle = i < a.charge ? (ready ? '#fde047' : '#38bdf8') : '#1f2937';
+      ctx.fillRect(x + 6 + i * (w + 3), y + 50, w, 6);
+    }
+    text(ctx, bindText('active'), x + 72, y + 58, 13, '#94a3b8', 'left');
   },
 
   drawHUD(ctx) {
@@ -499,28 +701,33 @@ Object.assign(Game, {
     g.addColorStop(1, '#0c0a12');
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, W, HUD_H);
-    ctx.fillStyle = this.theme.accent;
+    ctx.fillStyle = this.nightmare ? '#dc2626' : this.theme.accent;
     ctx.globalAlpha = 0.4;
     ctx.fillRect(0, HUD_H - 2, W, 2);
     ctx.globalAlpha = 1;
     for (let i = 0; i < p.maxHp / 2; i++) drawHeart(ctx, 26 + i * 28, 7, 22, clamp(p.hp - i * 2, 0, 2) / 2);
     drawCoin(ctx, 22, 47, 8);
     text(ctx, String(p.coins), 36, 53, 17, '#fde047', 'left');
-    drawItemIcon(ctx, '💣', 84, 47, 15);
-    text(ctx, String(p.bombs), 96, 53, 17, '#e5e7eb', 'left');
+    drawItemIcon(ctx, '💣', 80, 47, 15);
+    text(ctx, String(p.bombs), 92, 53, 17, '#e5e7eb', 'left');
+    drawKey(ctx, 132, 47, 0.75);
+    text(ctx, String(p.keys), 146, 53, 17, '#e5e7eb', 'left');
     const k = p.dashT > 0 ? 1 - p.dashT / p.dashCooldown : 1;
-    text(ctx, 'DASH', 136, 53, 11, '#94a3b8', 'left');
+    text(ctx, 'DASH', 182, 53, 11, '#94a3b8', 'left');
     ctx.fillStyle = '#1f2937';
-    roundRect(ctx, 172, 45, 64, 8, 4);
+    roundRect(ctx, 216, 45, 56, 8, 4);
     ctx.fill();
     ctx.fillStyle = k >= 1 ? p.char.body : p.char.dark;
-    roundRect(ctx, 172, 45, 64 * k, 8, 4);
+    roundRect(ctx, 216, 45, 56 * k, 8, 4);
     ctx.fill();
     ctx.font = `700 17px ${TFONT}`;
     ctx.textAlign = 'center';
     ctx.fillStyle = this.theme.accent;
     ctx.fillText(`Étage ${this.floor} · ${this.theme.name}`, W / 2, 28);
-    text(ctx, `${fmtTime(this.stats.time)}   ·   ☠ ${this.stats.kills}`, W / 2, 50, 13, '#94a3b8', 'center', 'normal');
+    const tags = [fmtTime(this.stats.time), `☠ ${this.stats.kills}`];
+    if (this.nightmare) tags.push('Cauchemar');
+    if (this.daily) tags.push('Défi du jour');
+    text(ctx, tags.join('   ·   '), W / 2, 50, 13, this.nightmare ? '#fca5a5' : '#94a3b8', 'center', 'normal');
     const per = 12;
     let hovered = null;
     p.items.forEach((id, i) => {
@@ -529,7 +736,7 @@ Object.assign(Game, {
       drawItemIcon(ctx, ITEM_BY_ID[id].icon, x, y, 18);
       if (Math.abs(Input.mouse.x - x) < 12 && Math.abs(Input.mouse.y - y) < 12) hovered = { id, x, y };
     });
-    if (hovered && this.state === 'playing') {
+    if (hovered && this.state === 'playing' && Input.lastDevice === 'mouse') {
       const it = ITEM_BY_ID[hovered.id];
       this.tooltip(ctx, hovered.x - 60, hovered.y + 18, it.name, it.desc);
     }
@@ -562,27 +769,48 @@ Object.assign(Game, {
   drawToast(ctx) {
     const t = this.toast;
     if (!t) return;
+    const desc = t.desc.replace('{active}', bindText('active'));
     const a = Math.min(1, t.t * 2, (3.2 - t.t) * 5);
     ctx.globalAlpha = clamp(a, 0, 1);
     ctx.font = `13px ${FONT}`;
-    const w = Math.max(320, ctx.measureText(t.desc).width + 100),
+    const w = Math.max(320, ctx.measureText(desc).width + 100),
       x = (W - w) / 2,
       y = HUD_H + 16;
     ctx.fillStyle = 'rgba(10,8,16,0.92)';
     roundRect(ctx, x, y, w, 58, 10);
     ctx.fill();
-    ctx.strokeStyle = '#fde047';
+    ctx.strokeStyle = t.active ? '#7dd3fc' : '#fde047';
     ctx.lineWidth = 2;
     ctx.stroke();
     drawItemIcon(ctx, t.icon, x + 34, y + 30, 30);
-    text(ctx, t.title, x + 64, y + 25, 18, '#fde047', 'left');
-    text(ctx, t.desc, x + 64, y + 45, 13, '#e5e7eb', 'left', 'normal');
+    text(ctx, t.title, x + 64, y + 25, 18, t.active ? '#7dd3fc' : '#fde047', 'left');
+    text(ctx, desc, x + 64, y + 45, 13, '#e5e7eb', 'left', 'normal');
     if (t.isNew) {
       ctx.fillStyle = '#a855f7';
       roundRect(ctx, x + w - 78, y + 10, 66, 18, 9);
       ctx.fill();
       text(ctx, 'NOUVEAU', x + w - 45, y + 23, 11, '#fff');
     }
+    ctx.globalAlpha = 1;
+  },
+
+  drawAchToast(ctx) {
+    const t = this.achToast;
+    if (!t) return;
+    const a = clamp(Math.min(t.t * 3, (3.6 - t.t) * 4), 0, 1);
+    const w = 300,
+      x = W - w - 14 + (1 - a) * 40,
+      y = this.state === 'playing' || this.state === 'paused' ? HUD_H + 84 : 14;
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(20,12,4,0.95)';
+    roundRect(ctx, x, y, w, 58, 10);
+    ctx.fill();
+    ctx.strokeStyle = '#f59e0b';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    drawItemIcon(ctx, t.a.icon, x + 30, y + 30, 26);
+    text(ctx, 'SUCCÈS DÉBLOQUÉ', x + 56, y + 22, 11, '#f59e0b', 'left');
+    text(ctx, t.a.name, x + 56, y + 43, 16, '#fff', 'left');
     ctx.globalAlpha = 1;
   },
 
@@ -627,22 +855,34 @@ Object.assign(Game, {
   },
 
   drawMenu(ctx) {
-    this.title(ctx, 'CRYPTE ÉTERNELLE', 160, 60);
-    text(ctx, 'Descends. Survis. Recommence.', W / 2, 202, 18, '#c4b5fd', 'center', 'normal');
+    this.title(ctx, 'CRYPTE ÉTERNELLE', 150, 60);
+    text(ctx, 'Descends. Survis. Recommence.', W / 2, 192, 18, '#c4b5fd', 'center', 'normal');
     const bx = W / 2 - 150,
       bw = 300;
-    this.button(ctx, bx, 244, bw, 54, 'Jouer', () => this.setState('select'), { size: 24 });
-    this.button(ctx, bx, 310, bw, 46, `Autel des âmes  ·  ${this.meta.souls} ✦`, () => this.setState('meta'), {
+    this.button(ctx, bx, 226, bw, 54, 'Jouer', () => this.setState('select'), { size: 24 });
+    this.button(ctx, bx, 292, bw, 44, `Autel des âmes  ·  ${this.meta.souls} ✦`, () => this.setState('meta'), {
       color: '#a855f7',
       size: 17,
     });
-    this.button(ctx, bx, 366, bw, 46, 'Grimoire', () => this.setState('codex'), { color: '#fbbf24', size: 17 });
     this.button(
       ctx,
       bx,
-      422,
+      346,
       bw,
-      46,
+      44,
+      'Grimoire',
+      () => {
+        this.codexTab = 'items';
+        this.setState('codex');
+      },
+      { color: '#fbbf24', size: 17 },
+    );
+    this.button(
+      ctx,
+      bx,
+      400,
+      bw,
+      44,
       'Paramètres',
       () => {
         this.settingsReturn = 'menu';
@@ -650,14 +890,14 @@ Object.assign(Game, {
       },
       { color: '#94a3b8', size: 17 },
     );
-    // personnages en vitrine
+    if (Input.lastDevice === 'touch' && document.fullscreenEnabled && !document.fullscreenElement)
+      this.button(ctx, bx, 454, bw, 40, 'Plein écran', () => this.toggleFullscreen(), { color: '#64748b', size: 16 });
     CHARACTERS.forEach((c, i) => {
       if (!this.meta.unlocked.includes(c.id)) return;
       const fake = new Player(c);
       fake.x = 0;
       fake.y = 0;
       fake.aim = Math.PI / 2 + Math.sin(this.t + i) * 0.6;
-      fake.moving = false;
       ctx.save();
       ctx.translate(W / 2 - 330 + i * 40, 520 - (i % 2) * 20);
       ctx.scale(1.8, 1.8);
@@ -670,21 +910,22 @@ Object.assign(Game, {
       : st.bestFloor
         ? `Record : étage ${st.bestFloor}`
         : "Aucune descente pour l'instant";
-    text(ctx, best, W / 2, 510, 15, '#94a3b8', 'center', 'normal');
+    text(ctx, best, W / 2, 520, 15, '#94a3b8', 'center', 'normal');
+    text(ctx, `Succès : ${this.meta.ach.length} / ${ACHIEVEMENTS.length}`, W / 2, 544, 13, '#a1a1aa', 'center', 'normal');
     this.hint(
       ctx,
       Input.lastDevice === 'pad' ? 'Ⓐ valider  ·  croix : naviguer' : '↑↓ naviguer  ·  Entrée valider  ·  F plein écran  ·  M son',
     );
-    text(ctx, 'v1.1', W - 16, H - 16, 11, '#4b5563', 'right', 'normal');
+    text(ctx, 'v1.2', W - 16, H - 16, 11, '#4b5563', 'right', 'normal');
   },
 
   drawSelect(ctx) {
-    this.title(ctx, 'CHOISIS TON HÉROS', 90, 40);
+    this.title(ctx, 'CHOISIS TON HÉROS', 74, 38);
     const cw = 270,
       gap = 22,
       x0 = (W - (cw * 3 + gap * 2)) / 2,
-      y = 130,
-      ch = 380;
+      y = 100,
+      ch = 340;
     CHARACTERS.forEach((c, i) => {
       const unlocked = this.meta.unlocked.includes(c.id);
       const x = x0 + i * (cw + gap);
@@ -712,19 +953,19 @@ Object.assign(Game, {
       fake.walkT = this.t;
       fake.aim = -0.35 + (focused ? Math.sin(this.t * 2) * 0.25 : 0);
       ctx.save();
-      ctx.translate(x + cw / 2 - 12, y + 88);
-      ctx.scale(2.8, 2.8);
+      ctx.translate(x + cw / 2 - 12, y + 78);
+      ctx.scale(2.6, 2.6);
       if (!unlocked) ctx.filter = 'brightness(0.15)';
       drawPlayer(ctx, fake, this.t);
       ctx.restore();
-      ctx.font = `900 26px ${TFONT}`;
+      ctx.font = `900 24px ${TFONT}`;
       ctx.textAlign = 'center';
       ctx.fillStyle = unlocked ? '#fff' : '#6b7280';
-      ctx.fillText(unlocked ? c.name : '???', x + cw / 2, y + 176);
-      text(ctx, unlocked ? c.title : 'Verrouillé', x + cw / 2, y + 198, 15, unlocked ? c.body : '#6b7280', 'center', 'normal');
+      ctx.fillText(unlocked ? c.name : '???', x + cw / 2, y + 156);
+      text(ctx, unlocked ? c.title : 'Verrouillé', x + cw / 2, y + 177, 15, unlocked ? c.body : '#6b7280', 'center', 'normal');
       if (unlocked) {
         ctx.font = `13px ${FONT}`;
-        wrapText(ctx, c.desc, cw - 36).forEach((l, j) => text(ctx, l, x + cw / 2, y + 228 + j * 18, 13, '#d4d4d8', 'center', 'normal'));
+        wrapText(ctx, c.desc, cw - 36).forEach((l, j) => text(ctx, l, x + cw / 2, y + 204 + j * 18, 13, '#d4d4d8', 'center', 'normal'));
         const rows = [
           ['Vie', '♥'.repeat(fake.maxHp / 2)],
           ['Dégâts', fake.dmg.toFixed(1)],
@@ -732,16 +973,76 @@ Object.assign(Game, {
           ['Vitesse', Math.round(fake.speed)],
         ];
         rows.forEach(([k, v], j) => {
-          text(ctx, k, x + 30, y + 296 + j * 20, 13, '#94a3b8', 'left', 'normal');
-          text(ctx, String(v), x + cw - 30, y + 296 + j * 20, 13, k === 'Vie' ? '#f87171' : '#fff', 'right');
+          text(ctx, k, x + 30, y + 262 + j * 19, 13, '#94a3b8', 'left', 'normal');
+          text(ctx, String(v), x + cw - 30, y + 262 + j * 19, 13, k === 'Vie' ? '#f87171' : '#fff', 'right');
         });
       } else {
-        drawItemIcon(ctx, '🔒', x + cw / 2, y + 250, 34);
-        text(ctx, c.unlock.text, x + cw / 2, y + 300, 15, '#fbbf24', 'center');
-        text(ctx, 'pour débloquer', x + cw / 2, y + 320, 13, '#94a3b8', 'center', 'normal');
+        drawItemIcon(ctx, '🔒', x + cw / 2, y + 226, 34);
+        text(ctx, c.unlock.text, x + cw / 2, y + 276, 15, '#fbbf24', 'center');
+        text(ctx, 'pour débloquer', x + cw / 2, y + 296, 13, '#94a3b8', 'center', 'normal');
       }
     });
-    this.button(ctx, W / 2 - 90, 540, 180, 44, '← Retour', () => this.setState('menu'), { color: '#94a3b8', size: 17 });
+    // options de partie
+    const o = this.runOpts,
+      oy = 456,
+      ow = 286,
+      ogap = 14,
+      ox = (W - (ow * 3 + ogap * 2)) / 2;
+    const nmOk = this.nightmareUnlocked();
+    this.button(
+      ctx,
+      ox,
+      oy,
+      ow,
+      44,
+      'Mode Cauchemar',
+      () => {
+        o.nightmare = !o.nightmare;
+      },
+      {
+        value: !nmOk ? '🔒' : o.nightmare ? 'Oui' : 'Non',
+        color: '#ef4444',
+        size: 15,
+        disabled: !nmOk,
+        onAdjust: () => {
+          if (nmOk) o.nightmare = !o.nightmare;
+        },
+      },
+    );
+    const seedLabel =
+      this.seedEdit !== null
+        ? (this.seedEdit || '') + (Math.floor(this.t * 2) % 2 ? '_' : ' ')
+        : o.daily
+          ? 'du jour'
+          : o.seed || 'aléatoire';
+    this.button(ctx, ox + ow + ogap, oy, ow, 44, 'Seed', () => this.editSeed(), { value: seedLabel, color: '#38bdf8', size: 15 });
+    this.button(
+      ctx,
+      ox + (ow + ogap) * 2,
+      oy,
+      ow,
+      44,
+      'Défi du jour',
+      () => {
+        o.daily = !o.daily;
+        if (o.daily) o.seed = '';
+      },
+      {
+        value: o.daily ? 'Oui' : 'Non',
+        color: '#f59e0b',
+        size: 15,
+        onAdjust: () => {
+          o.daily = !o.daily;
+        },
+      },
+    );
+    if (this.seedEdit !== null)
+      text(ctx, 'Tape une seed puis Entrée (Échap pour annuler)', W / 2, oy + 64, 13, '#7dd3fc', 'center', 'normal');
+    else if (!nmOk)
+      text(ctx, 'Termine la crypte une fois pour débloquer le mode Cauchemar', W / 2, oy + 64, 13, '#6b7280', 'center', 'normal');
+    else if (o.nightmare)
+      text(ctx, 'Ennemis plus résistants et plus rapides · âmes et score x1.5', W / 2, oy + 64, 13, '#fca5a5', 'center', 'normal');
+    this.button(ctx, W / 2 - 90, 548, 180, 42, '← Retour', () => this.setState('menu'), { color: '#94a3b8', size: 16 });
     this.hint(ctx, '← → choisir  ·  Entrée : commencer  ·  Échap : retour');
   },
 
@@ -768,12 +1069,7 @@ Object.assign(Game, {
         cost = u.cost(lvl);
       const x = x0 + i * (cw + gap),
         y = 190;
-      ctx.fillStyle = 'rgba(20,14,32,0.9)';
-      roundRect(ctx, x, y, cw, 290, 12);
-      ctx.fill();
-      ctx.strokeStyle = maxed ? '#fde047' : '#6d28d9';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+      this.panel(ctx, x, y, cw, 290, maxed ? '#fde047' : '#6d28d9');
       drawItemIcon(ctx, u.icon, x + cw / 2, y + 50, 40);
       text(ctx, u.name, x + cw / 2, y + 102, 18, '#fff');
       ctx.font = `13px ${FONT}`;
@@ -802,74 +1098,181 @@ Object.assign(Game, {
   },
 
   drawCodex(ctx) {
-    this.title(ctx, 'GRIMOIRE', 80, 42, '#fef3c7', '#f59e0b');
+    this.title(ctx, 'GRIMOIRE', 70, 40, '#fef3c7', '#f59e0b');
+    const tabs = [
+      ['items', 'Objets'],
+      ['ach', 'Succès'],
+      ['board', 'Classement'],
+      ['stats', 'Chroniques'],
+    ];
+    const tw = 160,
+      tx0 = (W - tabs.length * tw - (tabs.length - 1) * 10) / 2;
+    tabs.forEach(([id, label], i) => {
+      const x = tx0 + i * (tw + 10),
+        on = this.codexTab === id;
+      this.button(
+        ctx,
+        x,
+        92,
+        tw,
+        38,
+        label,
+        () => {
+          this.codexTab = id;
+        },
+        { color: on ? '#fbbf24' : '#57534e', size: 16 },
+      );
+      if (on) {
+        ctx.fillStyle = '#fbbf24';
+        ctx.fillRect(x + 20, 134, tw - 40, 3);
+      }
+    });
+    ({ items: this.drawCodexItems, ach: this.drawCodexAch, board: this.drawCodexBoard, stats: this.drawCodexStats })[this.codexTab].call(
+      this,
+      ctx,
+    );
+    this.button(ctx, W / 2 - 90, 576, 180, 42, '← Retour', () => this.setState('menu'), { color: '#94a3b8', size: 16 });
+  },
+  drawCodexItems(ctx) {
     const seen = this.meta.seen;
-    text(ctx, `Objets découverts : ${seen.length} / ${ITEMS.length}`, W / 2, 114, 16, '#fbbf24', 'center', 'normal');
-    const cols = 7,
-      cs = 60,
-      gap = 10,
-      gx = 60,
-      gy = 145;
+    text(
+      ctx,
+      `Objets découverts : ${ALL_ITEMS.filter(i => seen.includes(i.id)).length} / ${ALL_ITEMS.length}`,
+      W / 2,
+      164,
+      15,
+      '#fbbf24',
+      'center',
+      'normal',
+    );
+    const cols = 9,
+      cs = 64,
+      gap = 12,
+      gx = (W - (cols * cs + (cols - 1) * gap)) / 2,
+      gy = 182;
     let tip = null;
-    ITEMS.forEach((it, i) => {
+    ALL_ITEMS.forEach((it, i) => {
       const x = gx + (i % cols) * (cs + gap),
         y = gy + Math.floor(i / cols) * (cs + gap);
-      const known = seen.includes(it.id);
+      const known = seen.includes(it.id),
+        isActive = !!ACTIVE_BY_ID[it.id];
       const focused = this.addHit(x, y, cs, cs, () => {});
       roundRect(ctx, x, y, cs, cs, 10);
       ctx.fillStyle = focused ? 'rgba(251,191,36,0.2)' : 'rgba(255,255,255,0.05)';
       ctx.fill();
-      ctx.strokeStyle = focused ? '#fbbf24' : 'rgba(255,255,255,0.12)';
+      ctx.strokeStyle = focused ? '#fbbf24' : isActive ? 'rgba(56,189,248,0.45)' : 'rgba(255,255,255,0.12)';
       ctx.lineWidth = focused ? 2 : 1;
       ctx.stroke();
       if (known) drawItemIcon(ctx, it.icon, x + cs / 2, y + cs / 2 + 1, 28);
       else text(ctx, '?', x + cs / 2, y + cs / 2 + 9, 26, '#4b5563');
+      if (isActive) text(ctx, 'ACTIF', x + cs / 2, y + cs - 5, 9, '#7dd3fc');
       if (focused) tip = { x: x + cs / 2, y: y + cs + 6, it, known };
     });
-    // statistiques
-    const st = this.meta.stats,
-      sx = 590,
-      sy = 145;
-    ctx.fillStyle = 'rgba(20,14,32,0.9)';
-    roundRect(ctx, sx, sy, 310, 200, 12);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(251,191,36,0.4)';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-    ctx.font = `700 18px ${TFONT}`;
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#fef3c7';
-    ctx.fillText('Chroniques', sx + 155, sy + 30);
-    const rows = [
-      ['Descentes', st.runs],
-      ['Victoires', st.wins],
-      ['Morts', st.deaths],
-      ['Ennemis vaincus', st.kills],
-      ['Boss vaincus', st.bosses],
-      ['Record', st.bestFloor > MAX_FLOOR ? 'Crypte vaincue' : st.bestFloor ? 'Étage ' + st.bestFloor : '—'],
-      ['Victoire la plus rapide', st.fastWin ? fmtTime(st.fastWin) : '—'],
-    ];
-    rows.forEach(([k, v], i) => {
-      text(ctx, k, sx + 20, sy + 58 + i * 20, 13, '#a1a1aa', 'left', 'normal');
-      text(ctx, String(v), sx + 290, sy + 58 + i * 20, 13, '#fff', 'right');
-    });
-    this.button(ctx, W / 2 - 90, 540, 180, 44, '← Retour', () => this.setState('menu'), { color: '#94a3b8', size: 17 });
     if (tip) {
       if (tip.known) this.tooltip(ctx, tip.x, tip.y, tip.it.name, tip.it.desc);
       else this.tooltip(ctx, tip.x, tip.y, '???', 'Trouve cet objet pendant une descente', '#6b7280');
     }
   },
+  drawCodexAch(ctx) {
+    const got = this.meta.ach;
+    text(ctx, `Succès débloqués : ${got.length} / ${ACHIEVEMENTS.length}`, W / 2, 164, 15, '#fbbf24', 'center', 'normal');
+    const cols = 3,
+      cw = 290,
+      ch = 56,
+      gap = 10,
+      gx = (W - (cols * cw + (cols - 1) * gap)) / 2,
+      gy = 180;
+    ACHIEVEMENTS.forEach((a, i) => {
+      const x = gx + (i % cols) * (cw + gap),
+        y = gy + Math.floor(i / cols) * (ch + 8),
+        ok = got.includes(a.id);
+      ctx.fillStyle = ok ? 'rgba(245,158,11,0.12)' : 'rgba(255,255,255,0.04)';
+      roundRect(ctx, x, y, cw, ch, 10);
+      ctx.fill();
+      ctx.strokeStyle = ok ? 'rgba(245,158,11,0.6)' : 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.save();
+      if (!ok) ctx.globalAlpha = 0.35;
+      drawItemIcon(ctx, a.icon, x + 28, y + ch / 2 + 1, 24);
+      ctx.restore();
+      text(ctx, a.name, x + 52, y + 24, 15, ok ? '#fde68a' : '#9ca3af', 'left');
+      text(ctx, a.desc, x + 52, y + 43, 12, ok ? '#e5e7eb' : '#6b7280', 'left', 'normal');
+    });
+  },
+  drawCodexBoard(ctx) {
+    const b = this.meta.board;
+    text(ctx, 'Tes 10 meilleures descentes', W / 2, 164, 15, '#fbbf24', 'center', 'normal');
+    const cols = [
+      ['#', 70, 'left'],
+      ['Héros', 110, 'left'],
+      ['Résultat', 260, 'left'],
+      ['Temps', 470, 'right'],
+      ['Score', 580, 'right'],
+      ['Seed', 610, 'left'],
+      ['Date', 890, 'right'],
+    ];
+    cols.forEach(([h, x, al]) => text(ctx, h, x, 198, 12, '#a1a1aa', al));
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(60, 206, W - 120, 1);
+    if (!b.length) text(ctx, 'Aucune partie terminée pour le moment.', W / 2, 260, 15, '#6b7280', 'center', 'normal');
+    b.forEach((r, i) => {
+      const y = 232 + i * 32,
+        c = CHARACTERS.find(ch => ch.id === r.char) || CHARACTERS[0];
+      if (i % 2 === 0) {
+        ctx.fillStyle = 'rgba(255,255,255,0.03)';
+        ctx.fillRect(60, y - 20, W - 120, 30);
+      }
+      text(ctx, String(i + 1), 70, y, 15, i === 0 ? '#fde047' : '#e5e7eb', 'left');
+      circle(ctx, 116, y - 5, 6, c.body);
+      text(ctx, c.name, 128, y, 14, '#e5e7eb', 'left', 'normal');
+      const res = (r.win ? 'Victoire' : `Étage ${r.floor}`) + (r.nightmare ? ' · Cauchemar' : '') + (r.daily ? ' · Jour' : '');
+      text(ctx, res, 260, y, 14, r.win ? '#86efac' : '#e5e7eb', 'left', 'normal');
+      text(ctx, fmtTime(r.time), 470, y, 14, '#e5e7eb', 'right', 'normal');
+      text(ctx, r.score.toLocaleString('fr-FR'), 580, y, 15, '#fde68a', 'right');
+      text(ctx, r.seed, 610, y, 13, '#7dd3fc', 'left', 'normal');
+      text(ctx, r.date.split('-').reverse().join('/'), 890, y, 13, '#94a3b8', 'right', 'normal');
+    });
+  },
+  drawCodexStats(ctx) {
+    const st = this.meta.stats;
+    const rows = [
+      ['Descentes', st.runs],
+      ['Victoires', st.wins],
+      ['Victoires en Cauchemar', st.nightmareWins],
+      ['Morts', st.deaths],
+      ['Ennemis vaincus', st.kills],
+      ["Ennemis d'élite vaincus", st.elites],
+      ['Boss vaincus', st.bosses],
+      ['Salles secrètes trouvées', st.secrets],
+      ['Record', st.bestFloor > MAX_FLOOR ? 'Crypte vaincue' : st.bestFloor ? 'Étage ' + st.bestFloor : '—'],
+      ['Victoire la plus rapide', st.fastWin ? fmtTime(st.fastWin) : '—'],
+      ['Temps de jeu total', fmtTime(st.time)],
+    ];
+    this.panel(ctx, W / 2 - 230, 160, 460, 390, 'rgba(251,191,36,0.4)');
+    rows.forEach(([k, v], i) => {
+      text(ctx, k, W / 2 - 200, 196 + i * 32, 15, '#a1a1aa', 'left', 'normal');
+      text(ctx, String(v), W / 2 + 200, 196 + i * 32, 15, '#fff', 'right');
+    });
+  },
 
   drawSettings(ctx) {
-    this.title(ctx, 'PARAMÈTRES', 110, 40, '#e5e7eb', '#64748b');
-    const x = W / 2 - 230,
-      w = 460,
-      h = 48;
-    const vol = (key, label, y) =>
+    this.title(ctx, 'PARAMÈTRES', 64, 36, '#e5e7eb', '#64748b');
+    const x = W / 2 - 240,
+      w = 480,
+      h = 37,
+      step = 42;
+    let y = 86;
+    const row = () => {
+      const r = y;
+      y += step;
+      return r;
+    };
+    const vol = (key, label) =>
       this.button(
         ctx,
         x,
-        y,
+        row(),
         w,
         h,
         label,
@@ -881,59 +1284,131 @@ Object.assign(Game, {
           value: Math.round(Settings[key] * 100) + '%',
           bar: Settings[key],
           color: '#94a3b8',
-          size: 17,
+          size: 16,
           onAdjust: d => {
             Settings[key] = clamp(Math.round((Settings[key] + d * 0.1) * 10) / 10, 0, 1);
             saveSettings();
           },
         },
       );
-    const tog = (key, label, y) =>
+    const tog = (key, label) => {
+      const flip = () => {
+        Settings[key] = !Settings[key];
+        saveSettings();
+      };
+      this.button(ctx, x, row(), w, h, label, flip, { value: Settings[key] ? 'Oui' : 'Non', color: '#94a3b8', size: 16, onAdjust: flip });
+    };
+    vol('music', 'Musique');
+    vol('sfx', 'Effets sonores');
+    tog('shake', "Tremblements d'écran");
+    tog('reduceFlash', 'Réduire les flashs');
+    tog('contrastShots', 'Tirs ennemis contrastés');
+    tog('dmgNumbers', 'Chiffres de dégâts');
+    tog('showFps', 'Afficher les FPS');
+    this.button(ctx, x, row(), w, h, 'Plein écran', () => this.toggleFullscreen(), {
+      value: document.fullscreenElement ? 'Oui' : 'Non',
+      color: '#94a3b8',
+      size: 16,
+    });
+    this.button(ctx, x, row(), w, h, 'Touches du clavier', () => this.setState('controls'), { value: '›', color: '#94a3b8', size: 16 });
+    const tutLabel = this.meta.tutorialDone ? 'Non' : 'Oui';
+    this.button(
+      ctx,
+      x,
+      row(),
+      w,
+      h,
+      'Tutoriel à la prochaine partie',
+      () => {
+        this.meta.tutorialDone = !this.meta.tutorialDone;
+        this.saveMeta();
+      },
+      { value: tutLabel, color: '#94a3b8', size: 16 },
+    );
+    this.button(ctx, W / 2 - 90, y + 8, 180, 40, '← Retour', () => this.setState(this.settingsReturn), { color: '#94a3b8', size: 16 });
+    this.hint(ctx, '← → ajuster  ·  Échap : retour');
+  },
+
+  drawControls(ctx) {
+    this.title(ctx, 'TOUCHES', 70, 36, '#e5e7eb', '#64748b');
+    const x = W / 2 - 230,
+      w = 460;
+    ACTIONS.forEach((a, i) => {
+      const listening = this.listening === a;
       this.button(
         ctx,
         x,
-        y,
+        96 + i * 46,
         w,
-        h,
-        label,
+        40,
+        ACTION_LABELS[a],
         () => {
-          Settings[key] = !Settings[key];
-          saveSettings();
-        },
-        {
-          value: Settings[key] ? 'Oui' : 'Non',
-          color: '#94a3b8',
-          size: 17,
-          onAdjust: () => {
-            Settings[key] = !Settings[key];
+          this.listening = a;
+          Input.capture = code => {
+            this.listening = null;
+            if (code === 'Escape') return;
+            // échange si la touche est déjà utilisée
+            const other = ACTIONS.find(b => b !== a && Settings.keys[b] === code);
+            if (other) Settings.keys[other] = Settings.keys[a];
+            Settings.keys[a] = code;
             saveSettings();
-          },
+            Sfx.play('click');
+          };
         },
+        { value: listening ? 'Appuie sur une touche…' : keyLabel(Settings.keys[a]), color: listening ? '#fbbf24' : '#94a3b8', size: 16 },
       );
-    vol('music', 'Musique', 160);
-    vol('sfx', 'Effets sonores', 218);
-    tog('shake', "Tremblements d'écran", 276);
-    tog('dmgNumbers', 'Chiffres de dégâts', 334);
-    this.button(ctx, x, 392, w, h, 'Plein écran', () => this.toggleFullscreen(), {
-      value: document.fullscreenElement ? 'Oui' : 'Non',
-      color: '#94a3b8',
-      size: 17,
     });
-    this.button(ctx, W / 2 - 90, 470, 180, 44, '← Retour', () => this.setState(this.settingsReturn), { color: '#94a3b8', size: 17 });
-    this.hint(ctx, '← → ajuster  ·  Échap : retour');
+    const by = 96 + ACTIONS.length * 46 + 10;
+    text(
+      ctx,
+      'Tir : souris ou flèches  ·  Pause : Échap  ·  Plein écran : F  ·  Son : M',
+      W / 2,
+      by + 6,
+      13,
+      '#94a3b8',
+      'center',
+      'normal',
+    );
+    this.button(
+      ctx,
+      W / 2 - 200,
+      by + 24,
+      190,
+      40,
+      'Réinitialiser',
+      () => {
+        Settings.keys = { ...DEFAULT_KEYS };
+        saveSettings();
+      },
+      { color: '#ef4444', size: 16 },
+    );
+    this.button(
+      ctx,
+      W / 2 + 10,
+      by + 24,
+      190,
+      40,
+      '← Retour',
+      () => {
+        Input.capture = null;
+        this.listening = null;
+        this.setState('settings');
+      },
+      { color: '#94a3b8', size: 16 },
+    );
   },
 
   drawPause(ctx) {
     ctx.fillStyle = 'rgba(5,4,8,0.78)';
     ctx.fillRect(0, 0, W, H);
-    this.title(ctx, 'PAUSE', 150, 52, '#fff', this.theme.accent);
-    this.button(ctx, W / 2 - 130, 190, 260, 48, 'Reprendre', () => this.setState('playing'));
-    this.button(
-      ctx,
-      W / 2 - 130,
-      248,
-      260,
-      48,
+    this.title(ctx, 'PAUSE', 120, 52, '#fff', this.theme.accent);
+    let y = 150;
+    const btn = (label, fn, opts) => {
+      this.button(ctx, W / 2 - 130, y, 260, 44, label, fn, opts);
+      y += 52;
+    };
+    btn('Reprendre', () => this.setState('playing'));
+    btn(
       'Paramètres',
       () => {
         this.settingsReturn = 'paused';
@@ -941,12 +1416,8 @@ Object.assign(Game, {
       },
       { color: '#94a3b8' },
     );
-    this.button(
-      ctx,
-      W / 2 - 130,
-      306,
-      260,
-      48,
+    if (this.tut) btn('Passer le tutoriel', () => this.finishTutorial(false), { color: '#64748b', size: 17 });
+    btn(
       this.confirmQuit ? 'Vraiment abandonner ?' : 'Abandonner',
       () => {
         if (this.confirmQuit) this.gameOver(false);
@@ -955,9 +1426,7 @@ Object.assign(Game, {
       { color: '#ef4444', size: this.confirmQuit ? 17 : 20 },
     );
     const p = this.player;
-    ctx.fillStyle = 'rgba(255,255,255,0.05)';
-    roundRect(ctx, W / 2 - 280, 384, 560, 190, 12);
-    ctx.fill();
+    this.panel(ctx, W / 2 - 280, 384, 560, 196, 'rgba(255,255,255,0.08)');
     text(ctx, `${p.char.name} ${p.char.title}`, W / 2, 410, 16, p.char.body);
     const stats = [
       ['Dégâts', (p.rage && p.hp <= 2 ? p.dmg * 1.6 : p.dmg).toFixed(1)],
@@ -969,19 +1438,52 @@ Object.assign(Game, {
     ];
     stats.forEach(([k, v], i) => {
       const x = W / 2 - 250 + (i % 3) * 180,
-        y = 442 + Math.floor(i / 3) * 28;
-      text(ctx, k, x, y, 14, '#94a3b8', 'left', 'normal');
-      text(ctx, String(v), x + 80, y, 15, '#fff', 'left');
+        sy = 440 + Math.floor(i / 3) * 26;
+      text(ctx, k, x, sy, 14, '#94a3b8', 'left', 'normal');
+      text(ctx, String(v), x + 80, sy, 15, '#fff', 'left');
     });
     let tip = null;
     p.items.forEach((id, i) => {
       const x = W / 2 - (p.items.length - 1) * 15 + i * 30,
-        y = 532;
-      drawItemIcon(ctx, ITEM_BY_ID[id].icon, x, y, 22);
-      if (Math.abs(Input.mouse.x - x) < 14 && Math.abs(Input.mouse.y - y) < 14) tip = { x, y, it: ITEM_BY_ID[id] };
+        iy = 520;
+      drawItemIcon(ctx, ITEM_BY_ID[id].icon, x, iy, 22);
+      if (Math.abs(Input.mouse.x - x) < 14 && Math.abs(Input.mouse.y - iy) < 14) tip = { x, y: iy, it: ITEM_BY_ID[id] };
     });
-    if (!p.items.length) text(ctx, "Aucun objet pour l'instant", W / 2, 537, 13, '#6b7280', 'center', 'normal');
+    if (!p.items.length) text(ctx, "Aucun objet pour l'instant", W / 2, 525, 13, '#6b7280', 'center', 'normal');
+    text(ctx, `Seed : ${this.seed}`, W / 2, 564, 13, '#7dd3fc', 'center', 'normal');
     if (tip) this.tooltip(ctx, tip.x, tip.y - 62, tip.it.name, tip.it.desc);
+  },
+
+  drawCredits(ctx) {
+    const t = this.creditsT,
+      lineH = { title: 70, head: 34, line: 30, gap: 30 };
+    let y = H + 40 - t * 42;
+    ctx.save();
+    for (const [kind, str] of CREDITS) {
+      if (kind === 'title') {
+        ctx.save();
+        ctx.shadowColor = '#fbbf24';
+        ctx.shadowBlur = 24;
+        ctx.font = `900 40px ${TFONT}`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#fde68a';
+        ctx.fillText(str, W / 2, y);
+        ctx.restore();
+      } else if (kind === 'head') text(ctx, str.toUpperCase(), W / 2, y, 14, '#c4b5fd');
+      else if (kind === 'line') text(ctx, str, W / 2, y, 20, '#f5f5f4', 'center', 'normal');
+      y += lineH[kind];
+    }
+    ctx.restore();
+    // fondu haut et bas
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, 'rgba(7,6,11,1)');
+    g.addColorStop(0.15, 'rgba(7,6,11,0)');
+    g.addColorStop(0.85, 'rgba(7,6,11,0)');
+    g.addColorStop(1, 'rgba(7,6,11,1)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    if (Input.lastDevice !== 'touch') text(ctx, 'Entrée pour passer', W - 20, H - 20, 12, '#6b7280', 'right', 'normal');
+    else text(ctx, 'Touche l’écran pour passer', W - 20, H - 20, 12, '#6b7280', 'right', 'normal');
   },
 
   drawEnd(ctx) {
@@ -989,47 +1491,84 @@ Object.assign(Game, {
       win = r.win;
     const a = clamp(this.stateT * 2, 0, 1);
     ctx.globalAlpha = a;
-    ctx.fillStyle = win ? 'rgba(20,12,4,0.88)' : 'rgba(12,2,6,0.88)';
+    ctx.fillStyle = win ? 'rgba(20,12,4,0.9)' : 'rgba(12,2,6,0.9)';
     ctx.fillRect(0, 0, W, H);
-    this.title(ctx, win ? 'VICTOIRE' : 'TU ES MORT', 128, 58, win ? '#fde047' : '#f87171', win ? '#fbbf24' : '#dc2626');
-    text(
-      ctx,
-      win
-        ? 'La Liche est tombée. La crypte est libérée.'
-        : `${r.char.name} est tombé${r.char.id === 'knight' ? '' : 'e'} à l'étage ${r.floor} — ${THEMES[(r.floor - 1) % THEMES.length].name}`,
-      W / 2,
-      168,
-      17,
-      '#e5e7eb',
-      'center',
-      'normal',
-    );
+    this.title(ctx, win ? 'VICTOIRE' : 'TU ES MORT', 100, 54, win ? '#fde047' : '#f87171', win ? '#fbbf24' : '#dc2626');
+    const where = `${r.char.name} est tombé${r.char.id === 'knight' ? '' : 'e'} à l'étage ${r.floor} — ${THEMES[(r.floor - 1) % THEMES.length].name}`;
+    text(ctx, win ? 'La Liche est tombée. La crypte est libérée.' : where, W / 2, 136, 16, '#e5e7eb', 'center', 'normal');
+    const badges = [r.nightmare && 'Cauchemar', r.daily && 'Défi du jour'].filter(Boolean).join(' · ');
+    if (badges) text(ctx, badges, W / 2, 158, 13, '#fca5a5', 'center');
     const rows = [
       ['Ennemis vaincus', r.kills],
       ['Boss vaincus', r.bosses],
       ['Secrets trouvés', r.secrets],
       ['Temps', fmtTime(r.time)],
       ['Âmes récoltées', `+${r.souls} ✦`],
+      ['Score', r.score.toLocaleString('fr-FR') + (r.rank ? `  (n° ${r.rank})` : '')],
     ];
     rows.forEach(([k, v], i) => {
-      text(ctx, k, W / 2 - 150, 216 + i * 30, 16, '#a1a1aa', 'left', 'normal');
-      text(ctx, String(v), W / 2 + 150, 216 + i * 30, 17, i === rows.length - 1 ? '#c084fc' : '#fff', 'right');
+      text(ctx, k, W / 2 - 160, 190 + i * 27, 15, '#a1a1aa', 'left', 'normal');
+      text(ctx, String(v), W / 2 + 160, 190 + i * 27, 16, i === 4 ? '#c084fc' : i === 5 ? '#fde68a' : '#fff', 'right');
     });
-    r.items.forEach((id, i) => drawItemIcon(ctx, ITEM_BY_ID[id].icon, W / 2 - (r.items.length - 1) * 15 + i * 30, 372, 22));
-    let by = 408;
+    r.items.forEach((id, i) => drawItemIcon(ctx, ITEM_BY_ID[id].icon, W / 2 - (r.items.length - 1) * 14 + i * 28, 365, 20));
+    let by = 392;
     if (r.unlocks.length) {
       const c = r.unlocks[0],
         pulse = 0.6 + Math.sin(this.t * 4) * 0.4;
       ctx.fillStyle = `rgba(168,85,247,${0.15 + pulse * 0.1})`;
-      roundRect(ctx, W / 2 - 220, 396, 440, 40, 10);
+      roundRect(ctx, W / 2 - 220, by, 440, 34, 10);
       ctx.fill();
-      text(ctx, `✦ Nouveau héros débloqué : ${c.name} ${c.title} !`, W / 2, 422, 16, '#e9d5ff');
-      by = 452;
+      text(ctx, `✦ Nouveau héros débloqué : ${c.name} ${c.title} !`, W / 2, by + 23, 15, '#e9d5ff');
+      by += 44;
     }
-    this.button(ctx, W / 2 - 250, by, 240, 50, 'Rejouer', () => this.newRun(r.char.id));
-    this.button(ctx, W / 2 + 10, by, 240, 50, 'Changer de héros', () => this.setState('select'), { color: '#a855f7', size: 18 });
-    this.button(ctx, W / 2 - 250, by + 62, 240, 44, 'Autel des âmes', () => this.setState('meta'), { color: '#a855f7', size: 17 });
-    this.button(ctx, W / 2 + 10, by + 62, 240, 44, 'Menu', () => this.setState('menu'), { color: '#94a3b8', size: 17 });
+    this.button(
+      ctx,
+      W / 2 - 330,
+      by,
+      210,
+      46,
+      'Rejouer',
+      () => {
+        Object.assign(this.runOpts, { seed: '', daily: false, nightmare: r.nightmare });
+        this.newRun(r.char.id);
+      },
+      { size: 18 },
+    );
+    this.button(
+      ctx,
+      W / 2 - 105,
+      by,
+      210,
+      46,
+      'Même seed',
+      () => {
+        Object.assign(this.runOpts, { seed: r.daily ? '' : r.seed, daily: r.daily, nightmare: r.nightmare });
+        this.newRun(r.char.id);
+      },
+      { color: '#38bdf8', size: 18 },
+    );
+    this.button(ctx, W / 2 + 120, by, 210, 46, 'Changer de héros', () => this.setState('select'), { color: '#a855f7', size: 17 });
+    this.button(ctx, W / 2 - 215, by + 56, 210, 40, 'Autel des âmes', () => this.setState('meta'), { color: '#a855f7', size: 16 });
+    this.button(ctx, W / 2 + 5, by + 56, 210, 40, 'Menu', () => this.setState('menu'), { color: '#94a3b8', size: 16 });
+    const seedFocus = this.addHit(W / 2 - 120, by + 104, 240, 26, () => {
+      navigator.clipboard?.writeText(r.seed).then(
+        () => {
+          this.seedCopiedT = 2;
+        },
+        () => {},
+      );
+    });
+    const copied = this.seedCopiedT > 0 && (this.seedCopiedT -= 1 / 60) > 0;
+    text(
+      ctx,
+      copied ? 'Seed copiée !' : `Seed : ${r.seed}  (copier)`,
+      W / 2,
+      by + 122,
+      14,
+      seedFocus ? '#fde047' : '#7dd3fc',
+      'center',
+      'normal',
+    );
     ctx.globalAlpha = 1;
   },
 });

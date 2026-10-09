@@ -1,4 +1,4 @@
-import { TILE, COLS, ROWS, RW, RH, view, DOORS, OPP, DIRS, TAU, randi, choice, shuffle, mulberry32 } from '../core/utils.js';
+import { TILE, COLS, ROWS, RW, RH, view, DOORS, OPP, DIRS, TAU, mulberry32, makeRng } from '../core/utils.js';
 
 export const THEMES = [
   {
@@ -54,7 +54,7 @@ export const THEMES = [
 ];
 
 export class Room {
-  constructor(gx, gy, type) {
+  constructor(gx, gy, type, rng = makeRng(Math.random() * 1e9)) {
     this.gx = gx;
     this.gy = gy;
     this.type = type;
@@ -64,10 +64,12 @@ export class Room {
     this.visited = false;
     this.spawned = false;
     this.locked = false;
-    this.cleared = type !== 'normal' && type !== 'boss';
+    this.cleared = !['normal', 'boss', 'challenge'].includes(type);
     this.pickups = [];
     this.trapdoor = null;
-    this.seed = Math.floor(Math.random() * 1e9);
+    this.seed = Math.floor(rng.next() * 1e9);
+    this.rng = rng;
+    this.spikes = [];
     this.canvas = null;
     this.dirty = true;
   }
@@ -80,7 +82,10 @@ export class Room {
     }
     for (const d in this.doors) if (!this.hidden[d]) t[DOORS[d].ty][DOORS[d].tx] = 0;
     this.tiles = t;
-    if (this.type === 'normal') this.placeRocks();
+    if (this.type === 'normal') {
+      this.placeRocks(this.rng);
+      if (this.rng.chance(0.28)) this.placeSpikes(this.rng);
+    }
     // décor déterministe
     const R = mulberry32(this.seed);
     this.decor = [];
@@ -101,7 +106,38 @@ export class Room {
     if (Math.abs(x - 7) <= 1 && (y <= 1 || y >= ROWS - 2)) return false;
     return true;
   }
-  placeRocks() {
+  placeSpikes(rng) {
+    const t = this.tiles;
+    const put = (x, y) => {
+      for (const [a, b] of [
+        [x, y],
+        [COLS - 1 - x, y],
+        [x, ROWS - 1 - y],
+        [COLS - 1 - x, ROWS - 1 - y],
+      ])
+        if (this.canRock(a, b) && t[b][a] === 0) t[b][a] = 3;
+    };
+    const pattern = rng.choice(['row', 'corners', 'ring']);
+    if (pattern === 'row') {
+      const y = rng.randi(2, 3);
+      for (let x = rng.randi(3, 4); x <= 6; x++) put(x, y);
+    } else if (pattern === 'corners') {
+      put(2, 1);
+      put(3, 1);
+      put(2, 2);
+    } else {
+      put(5, 2);
+      put(6, 2);
+    }
+    this.spikes = [];
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (t[y][x] === 3) this.spikes.push({ tx: x, ty: y });
+  }
+  spikeAt(x, y) {
+    const tx = Math.floor(x / TILE),
+      ty = Math.floor(y / TILE);
+    return tx >= 0 && ty >= 0 && tx < COLS && ty < ROWS && this.tiles[ty][tx] === 3;
+  }
+  placeRocks(rng) {
     const base = this.tiles;
     for (let attempt = 0; attempt < 40; attempt++) {
       const t = base.map(r => r.slice());
@@ -114,22 +150,22 @@ export class Room {
         ])
           if (this.canRock(a, b)) t[b][a] = 2;
       };
-      const pattern = choice(['scatter', 'scatter', 'pillars', 'clusters', 'wall', 'none']);
+      const pattern = rng.choice(['scatter', 'scatter', 'pillars', 'clusters', 'wall', 'none']);
       if (pattern === 'scatter') {
-        for (let i = randi(2, 4); i > 0; i--) put(randi(1, 6), randi(1, 3));
+        for (let i = rng.randi(2, 4); i > 0; i--) put(rng.randi(1, 6), rng.randi(1, 3));
       } else if (pattern === 'pillars') {
         put(3, 2);
         put(5, 2);
-        if (Math.random() < 0.5) put(3, 3);
+        if (rng.chance(0.5)) put(3, 3);
       } else if (pattern === 'clusters') {
-        const x = randi(2, 4),
-          y = randi(1, 2);
+        const x = rng.randi(2, 4),
+          y = rng.randi(1, 2);
         put(x, y);
         put(x + 1, y);
         put(x, y + 1);
       } else if (pattern === 'wall') {
-        const y = randi(2, 3);
-        for (let x = randi(2, 3); x <= 5; x++) put(x, y);
+        const y = rng.randi(2, 3);
+        for (let x = rng.randi(2, 3); x <= 5; x++) put(x, y);
       }
       if (this.connected(t)) {
         this.tiles = t;
@@ -139,7 +175,8 @@ export class Room {
   }
   connected(t) {
     let total = 0;
-    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (t[y][x] === 0) total++;
+    const open = v => v === 0 || v === 3;
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) if (open(t[y][x])) total++;
     const seen = new Set(['7,4']);
     const q = [[7, 4]];
     while (q.length) {
@@ -153,7 +190,7 @@ export class Room {
         const nx = x + dx,
           ny = y + dy,
           k = nx + ',' + ny;
-        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || seen.has(k) || t[ny][nx] !== 0) continue;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || seen.has(k) || !open(t[ny][nx])) continue;
         seen.add(k);
         q.push([nx, ny]);
       }
@@ -325,6 +362,23 @@ export class Room {
       x.lineTo(cx + 16, cy + 22);
       x.stroke();
     }
+    // plaques de pointes (les pointes elles-mêmes sont animées en jeu)
+    for (const sp of this.spikes) {
+      const px = sp.tx * TILE,
+        py = sp.ty * TILE;
+      x.fillStyle = 'rgba(0,0,0,0.35)';
+      x.fillRect(px + 4, py + 4, TILE - 8, TILE - 8);
+      x.strokeStyle = 'rgba(255,255,255,0.08)';
+      x.lineWidth = 2;
+      x.strokeRect(px + 5, py + 5, TILE - 10, TILE - 10);
+      x.fillStyle = '#0a0810';
+      for (let i = 0; i < 3; i++)
+        for (let j = 0; j < 3; j++) {
+          x.beginPath();
+          x.arc(px + 16 + i * 16, py + 16 + j * 16, 3.5, 0, TAU);
+          x.fill();
+        }
+    }
     // rochers
     for (let ty = 0; ty < ROWS; ty++)
       for (let tx = 0; tx < COLS; tx++) {
@@ -362,19 +416,19 @@ export class Room {
   }
 }
 
-export function generateFloor(floor) {
+export function generateFloor(floor, rng = makeRng(Math.random() * 1e9)) {
   const size = 9,
     key = (x, y) => x + ',' + y;
   const dv = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
   for (let tries = 0; tries < 500; tries++) {
-    const target = Math.min(8 + floor * 2 + randi(0, 2), 22);
+    const target = Math.min(8 + floor * 2 + rng.randi(0, 2), 22);
     const cells = new Set([key(4, 4)]);
     const list = [[4, 4]];
     const nb = (x, y) => DIRS.reduce((n, d) => n + (cells.has(key(x + dv[d][0], y + dv[d][1])) ? 1 : 0), 0);
     let guard = 0;
     while (list.length < target && guard++ < 3000) {
-      const [bx, by] = choice(list);
-      const [dx, dy] = dv[choice(DIRS)];
+      const [bx, by] = rng.choice(list);
+      const [dx, dy] = dv[rng.choice(DIRS)];
       const nx = bx + dx,
         ny = by + dy;
       if (nx < 0 || ny < 0 || nx >= size || ny >= size || cells.has(key(nx, ny))) continue;
@@ -402,13 +456,14 @@ export function generateFloor(floor) {
     if (dead.length < 3 || distMap.get(key(dead[0][0], dead[0][1])) < 3) continue;
     const types = new Map();
     types.set(key(dead[0][0], dead[0][1]), 'boss');
-    const rest = shuffle(dead.slice(1));
+    const rest = rng.shuffle(dead.slice(1));
     types.set(key(rest[0][0], rest[0][1]), 'treasure');
     types.set(key(rest[1][0], rest[1][1]), 'shop');
+    if (rest.length >= 3 && floor >= 2) types.set(key(rest[2][0], rest[2][1]), 'challenge');
     types.set(key(4, 4), 'start');
 
     const rooms = new Map();
-    for (const [x, y] of list) rooms.set(key(x, y), new Room(x, y, types.get(key(x, y)) || 'normal'));
+    for (const [x, y] of list) rooms.set(key(x, y), new Room(x, y, types.get(key(x, y)) || 'normal', makeRng(rng.next() * 4294967296)));
     for (const r of rooms.values()) {
       for (const d of DIRS) {
         const n = rooms.get(key(r.gx + dv[d][0], r.gy + dv[d][1]));
@@ -426,14 +481,14 @@ export function generateFloor(floor) {
         if (rooms.has(key(x, y))) continue;
         const ns = DIRS.map(d => rooms.get(key(x + dv[d][0], y + dv[d][1]))).filter(Boolean);
         if (ns.some(n => n.type === 'boss' || n.type === 'start')) continue;
-        const score = ns.length + Math.random() * 0.5;
+        const score = ns.length + rng.next() * 0.5;
         if (ns.length && score > bestN) {
           bestN = score;
           bestCell = [x, y];
         }
       }
     if (bestCell) {
-      const sr = new Room(bestCell[0], bestCell[1], 'secret');
+      const sr = new Room(bestCell[0], bestCell[1], 'secret', makeRng(rng.next() * 4294967296));
       rooms.set(key(sr.gx, sr.gy), sr);
       for (const d of DIRS) {
         const n = rooms.get(key(sr.gx + dv[d][0], sr.gy + dv[d][1]));

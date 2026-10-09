@@ -1,0 +1,21 @@
+export const ACHIEVEMENTS = [
+  { id: 'boss1', name: 'Régicide', desc: 'Vaincre un boss', icon: '👑' },
+  { id: 'win', name: 'Libérateur', desc: 'Terminer la crypte', icon: '🏆' },
+  { id: 'nightmare', name: 'Cauchemar éveillé', desc: 'Terminer la crypte en mode Cauchemar', icon: '🔥' },
+  { id: 'win_mage', name: 'Archimage', desc: 'Gagner avec Élyra', icon: '🔮' },
+  { id: 'win_rogue', name: 'Ombre fugace', desc: 'Gagner avec Nyx', icon: '🌙' },
+  { id: 'win_knight', name: 'Rempart', desc: 'Gagner avec Aldric', icon: '🛡️' },
+  { id: 'fast', name: 'Éclair', desc: 'Gagner en moins de 12 minutes', icon: '⚡' },
+  { id: 'nohit', name: 'Intouchable', desc: 'Vaincre un boss sans être touché', icon: '✨' },
+  { id: 'clutch', name: 'Sur le fil', desc: 'Vaincre un boss avec un demi-cœur', icon: '💔' },
+  { id: 'secrets', name: 'Archéologue', desc: 'Trouver 5 salles secrètes', icon: '🗝️' },
+  { id: 'collector', name: 'Collectionneur', desc: 'Découvrir tous les objets', icon: '📚' },
+  { id: 'butcher', name: 'Fléau', desc: 'Vaincre 1000 ennemis', icon: '☠️' },
+  { id: 'elites', name: "Chasseur d'élite", desc: "Vaincre 25 ennemis d'élite", icon: '🎯' },
+  { id: 'rich', name: 'Pactole', desc: 'Posséder 50 pièces en même temps', icon: '💰' },
+  { id: 'bomb3', name: 'Artificier', desc: 'Vaincre 3 ennemis avec une seule bombe', icon: '💥' },
+  { id: 'arsenal', name: 'Arsenal', desc: 'Posséder 10 objets en même temps', icon: '🎒' },
+  { id: 'challenge', name: 'Gladiateur', desc: 'Réussir une salle de défi', icon: '⚔️' },
+  { id: 'daily', name: 'Rituel quotidien', desc: 'Vaincre un boss pendant un défi du jour', icon: '📅' },
+];
+export const ACHIEVEMENT_BY_ID = Object.fromEntries(ACHIEVEMENTS.map(a => [a.id, a]));
